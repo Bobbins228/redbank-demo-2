@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redbank-mcp-server
+  labels:
+    kagenti.io/type: tool
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redbank-mcp-server
+  template:
+    metadata:
+      labels:
+        app: redbank-mcp-server
+        kagenti.io/type: tool
+    spec:
+      containers:
+      - name: mcp-server
+        image: image-registry.openshift-image-registry.svc:5000/mark-test/redbank-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        env:
+        - name: POSTGRES_HOST
+          value: "postgresql"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_DATABASE
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_PASSWORD
+        # JWT verification — set to "true" in production with a valid JWKS_URL
+        - name: JWT_VERIFY
+          value: "false"
+        - name: JWT_ALGORITHMS
+          value: "RS256"
+        # Default identity when no Bearer token is present (local dev only)
+        - name: DEFAULT_ROLE
+          value: "admin"
+        - name: DEFAULT_EMAIL
+          value: "jane@redbank.demo"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redbank-mcp-server
+  labels:
+    protocol.kagenti.io/mcp: "true"
+spec:
+  selector:
+    app: redbank-mcp-server
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
