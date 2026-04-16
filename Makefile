@@ -1,6 +1,7 @@
-.PHONY: deploy-db deploy-mcp deploy-all
+.PHONY: deploy-db deploy-mcp deploy-all clean setup-keycloak
 
 NAMESPACE ?= redbank-demo
+export NAMESPACE
 
 deploy-db:
 	oc new-project $(NAMESPACE) 2>/dev/null || oc project $(NAMESPACE)
@@ -11,3 +12,9 @@ deploy-mcp:
 
 deploy-all: deploy-db deploy-mcp
 	@echo "RedBank Kagenti demo deployed to namespace $(NAMESPACE)"
+
+clean:
+	bash scripts/cleanup.sh
+
+setup-keycloak:
+	bash scripts/setup-keycloak.sh

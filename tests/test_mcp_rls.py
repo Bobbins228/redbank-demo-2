@@ -5,13 +5,20 @@ Prerequisites:
     - MCP server is deployed and running
     - Port-forward is active:  oc port-forward svc/redbank-mcp-server 8000:8000
     - Database has been seeded with init.sql
+    - Keycloak realm 'redbank' is configured (run: make setup-keycloak)
 
 Usage:
     pip install requests pytest
     pytest tests/test_mcp_rls.py -v
 
-Override the MCP endpoint:
-    MCP_URL=http://localhost:9000/mcp pytest tests/test_mcp_rls.py -v
+Environment variables:
+    MCP_URL           MCP server endpoint (default: http://localhost:8000/mcp)
+    KEYCLOAK_URL      Keycloak base URL
+    KEYCLOAK_REALM    Realm name (default: redbank)
+    KEYCLOAK_CLIENT   Client ID (default: redbank-mcp)
+    JOHN_PASSWORD     Password for john (default: john123)
+    JANE_PASSWORD     Password for jane (default: jane123)
+    USE_FAKE_JWT      Set to 'true' to use unsigned JWTs instead of Keycloak (local dev)
 """
 
 from __future__ import annotations
@@ -19,12 +26,38 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
 import uuid
 
 import pytest
 import requests
 
+
+def _detect_keycloak_url() -> str:
+    """Return KEYCLOAK_URL from env, or auto-detect via oc route."""
+    url = os.getenv("KEYCLOAK_URL", "")
+    if url:
+        return url
+    try:
+        host = subprocess.check_output(
+            ["oc", "get", "route", "keycloak", "-n", "keycloak",
+             "-o", "jsonpath={.spec.host}"],
+            text=True, timeout=10,
+        ).strip()
+        if host:
+            return f"https://{host}"
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+
 MCP_URL = os.getenv("MCP_URL", "http://localhost:8000/mcp")
+KEYCLOAK_URL = _detect_keycloak_url()
+KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "redbank")
+KEYCLOAK_CLIENT = os.getenv("KEYCLOAK_CLIENT", "redbank-mcp")
+JOHN_PASSWORD = os.getenv("JOHN_PASSWORD", "john123")
+JANE_PASSWORD = os.getenv("JANE_PASSWORD", "jane123")
+USE_FAKE_JWT = os.getenv("USE_FAKE_JWT", "false").lower() == "true"
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -32,11 +65,31 @@ HEADERS = {
 }
 
 
-# -- Helpers ------------------------------------------------------------------
+# -- Token helpers ------------------------------------------------------------
 
 
-def _make_jwt(email: str, roles: list[str]) -> str:
-    """Build an unsigned JWT. The server has JWT_VERIFY=false."""
+def _get_keycloak_token(username: str, password: str) -> str:
+    """Fetch a real access token from Keycloak via Resource Owner Password grant."""
+    if not KEYCLOAK_URL:
+        pytest.skip(
+            "KEYCLOAK_URL not set. Export it or use USE_FAKE_JWT=true. "
+            "Example: KEYCLOAK_URL=https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}')"
+        )
+    token_url = f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
+    resp = requests.post(token_url, data={
+        "grant_type": "password",
+        "client_id": KEYCLOAK_CLIENT,
+        "username": username,
+        "password": password,
+    })
+    resp.raise_for_status()
+    token = resp.json().get("access_token")
+    assert token, f"No access_token in Keycloak response for {username}"
+    return token
+
+
+def _make_fake_jwt(email: str, roles: list[str]) -> str:
+    """Build an unsigned JWT for local dev (JWT_VERIFY=false)."""
     header = base64.urlsafe_b64encode(
         json.dumps({"alg": "none", "typ": "JWT"}).encode()
     ).rstrip(b"=").decode()
@@ -50,8 +103,18 @@ def _make_jwt(email: str, roles: list[str]) -> str:
     return f"{header}.{payload}."
 
 
-JOHN_JWT = _make_jwt("john@redbank.demo", ["user"])
-JANE_JWT = _make_jwt("jane@redbank.demo", ["admin"])
+def _get_token(username: str, password: str, email: str, roles: list[str]) -> str:
+    """Get a token — real Keycloak or fake JWT depending on USE_FAKE_JWT."""
+    if USE_FAKE_JWT:
+        return _make_fake_jwt(email, roles)
+    return _get_keycloak_token(username, password)
+
+
+JOHN_JWT = _get_token("john", JOHN_PASSWORD, "john@redbank.demo", ["user"])
+JANE_JWT = _get_token("jane", JANE_PASSWORD, "jane@redbank.demo", ["admin"])
+
+
+# -- MCP helpers --------------------------------------------------------------
 
 
 def _init_session(bearer: str | None = None) -> str:
@@ -125,7 +188,6 @@ def _tool_content(result: dict) -> dict | list | str:
     """Extract structured content or text from a tool result."""
     if "structuredContent" in result:
         sc = result["structuredContent"]
-        # FastMCP wraps non-object returns (e.g. list) in {"result": [...]}
         if isinstance(sc, dict) and "result" in sc and len(sc) == 1:
             return sc["result"]
         return sc
@@ -325,7 +387,6 @@ class TestWriteEnforcement:
         content = _tool_content(result)
         assert content["phone"] == "555-0199"
 
-        # Restore original value
         _tool_call(admin_session, "update_account", {"customer_id": 5, "phone": "555-0105"})
 
     def test_admin_can_create_transaction(self, admin_session: str):
@@ -351,7 +412,7 @@ class TestWriteEnforcement:
 
 
 class TestAdminJWT:
-    """Verify admin access works via explicit JWT (not just default fallback)."""
+    """Verify admin access works via explicit Keycloak token (not just default fallback)."""
 
     @pytest.fixture(scope="class")
     def jane_session(self) -> str:
@@ -375,7 +436,6 @@ class TestAdminJWT:
         content = _tool_content(result)
         assert content["address"] == "999 Test St, Seattle, WA"
 
-        # Restore
         _tool_call(
             jane_session,
             "update_account",

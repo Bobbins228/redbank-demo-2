@@ -9,21 +9,31 @@ function _out() {
 }
 
 function setup() {
-  _out Deploying redbank-mcp-server
+  local ns="${NAMESPACE:-redbank-demo}"
+  _out "Deploying redbank-mcp-server to namespace: ${ns}"
 
-  # oc new-project redbank-demo 2>/dev/null || oc project redbank-demo
-  # oc project redbank-demo
-  oc project mark-test
+  if [[ -z "${KEYCLOAK_HOST:-}" ]]; then
+    KEYCLOAK_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null) || true
+  fi
+  if [[ -z "${KEYCLOAK_HOST}" ]]; then
+    echo "ERROR: KEYCLOAK_HOST not set and could not auto-detect from 'oc get route keycloak -n keycloak'." >&2
+    echo "Set KEYCLOAK_HOST=<your-keycloak-host> and re-run." >&2
+    exit 1
+  fi
+  _out "Using Keycloak host: ${KEYCLOAK_HOST}"
+
+  oc new-project "${ns}" 2>/dev/null || oc project "${ns}"
 
   cd "${SCRIPT_FOLDER}"
 
   _out Building MCP server image
   oc new-build --name build-redbank-mcp-server --binary --strategy docker \
-    --to=image-registry.openshift-image-registry.svc:5000/mark-test/redbank-mcp-server:latest
+    --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-mcp-server:latest" 2>/dev/null || true
   oc start-build build-redbank-mcp-server --from-dir=. --follow
 
   _out Deploying MCP server
-  oc apply -f ./mcp-server.yaml
+  NAMESPACE="${ns}" KEYCLOAK_HOST="${KEYCLOAK_HOST}" \
+    envsubst '${NAMESPACE} ${KEYCLOAK_HOST}' < ./mcp-server.yaml | oc apply -f -
 
   _out Done deploying redbank-mcp-server
 }

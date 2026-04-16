@@ -15,7 +15,7 @@
 """RedBank PostgreSQL MCP Server — Kagenti edition.
 
 Adapted from redbank-demo/mcp-server to add:
-- JWT-based auth token extraction from the Authorization header
+- AuthBridge-compatible JWT auth (trusts sidecar validation, with optional standalone JWKS verify)
 - RLS-aware database connections (app.current_role, app.current_user_email)
 - Admin/user role enforcement
 - Write tools: update_account, create_transaction
@@ -32,6 +32,7 @@ from functools import wraps
 from typing import Any, Optional, Union
 
 import jwt
+from jwt import PyJWKClient
 import psycopg
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
@@ -45,13 +46,37 @@ mcp = FastMCP("redbank_postgresql")
 logger.info("MCP Server initialized: RedBank PostgreSQL (Kagenti)")
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Auth config
+# ---------------------------------------------------------------------------
+#
+# Two modes of operation:
+#
+#   JWT_VERIFY=false (default) — "AuthBridge trusted" mode
+#     The Envoy sidecar (AuthBridge) has already validated the JWT signature,
+#     expiration, issuer, and audience via JWKS.  We decode without verification
+#     to extract identity claims.  This is the standard Kagenti deployment model.
+#
+#   JWT_VERIFY=true — "standalone" mode
+#     No AuthBridge sidecar in front.  The MCP server fetches signing keys from
+#     JWKS_URL and verifies the JWT itself.  Use for dev clusters without Kagenti
+#     or as defense-in-depth.
 # ---------------------------------------------------------------------------
 
 JWKS_URL = os.getenv("JWKS_URL", "")
 JWT_VERIFY = os.getenv("JWT_VERIFY", "false").lower() == "true"
 JWT_ALGORITHMS = os.getenv("JWT_ALGORITHMS", "RS256").split(",")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "")
+ADMIN_ROLE_CLAIM = os.getenv("ADMIN_ROLE_CLAIM", "admin")
+
+_jwks_client: PyJWKClient | None = None
+
+if JWT_VERIFY and JWKS_URL:
+    _jwks_client = PyJWKClient(JWKS_URL, cache_keys=True)
+    logger.info("JWT verification enabled — JWKS from %s", JWKS_URL)
+elif JWT_VERIFY and not JWKS_URL:
+    logger.warning("JWT_VERIFY=true but no JWKS_URL set — signature verification will fail")
+else:
+    logger.info("JWT verification disabled — trusting AuthBridge sidecar")
 
 
 @dataclass
@@ -61,19 +86,16 @@ class AuthContext:
 
 
 def _extract_auth() -> AuthContext:
-    """Extract user identity from the Authorization header JWT.
+    """Extract user identity from the AuthBridge-forwarded JWT.
 
-    When JWT_VERIFY is false (default for local dev), the token is decoded
-    without signature verification — the assumption is that AuthBridge has
-    already validated it upstream.
+    AuthBridge (Envoy + go-processor sidecar) performs RFC 8693 token exchange
+    and forwards an audience-scoped Bearer token on the Authorization header.
+    This function decodes the claims to determine identity and role.
     """
     headers = get_http_headers()
     auth_header = headers.get("authorization", "")
 
     if not auth_header.startswith("Bearer "):
-        # No token — fall back to admin for local dev convenience.
-        # In production, AuthBridge rejects unauthenticated requests before
-        # they reach the MCP server.
         default_role = os.getenv("DEFAULT_ROLE", "admin")
         default_email = os.getenv("DEFAULT_EMAIL", "jane@redbank.demo")
         logger.warning("No Bearer token — using defaults (role=%s)", default_role)
@@ -81,21 +103,37 @@ def _extract_auth() -> AuthContext:
 
     token = auth_header[7:]
 
-    decode_opts: dict[str, Any] = {}
-    if not JWT_VERIFY:
-        decode_opts["options"] = {"verify_signature": False}
-        decode_opts["algorithms"] = JWT_ALGORITHMS
-    else:
-        decode_opts["algorithms"] = JWT_ALGORITHMS
+    if JWT_VERIFY and _jwks_client:
+        signing_key = _jwks_client.get_signing_key_from_jwt(token)
+        decode_kwargs: dict[str, Any] = {
+            "key": signing_key.key,
+            "algorithms": JWT_ALGORITHMS,
+        }
         if JWT_AUDIENCE:
-            decode_opts["audience"] = JWT_AUDIENCE
+            decode_kwargs["audience"] = JWT_AUDIENCE
+    else:
+        decode_kwargs = {
+            "options": {"verify_signature": False},
+            "algorithms": JWT_ALGORITHMS,
+        }
 
-    claims = jwt.decode(token, options=decode_opts.get("options"), algorithms=decode_opts.get("algorithms"))
+    claims = jwt.decode(token, **decode_kwargs)
 
-    email = claims.get("email", claims.get("preferred_username", claims.get("sub", "")))
+    # Keycloak/AuthBridge claim extraction — email with fallback chain
+    email = (
+        claims.get("email")
+        or claims.get("preferred_username")
+        or claims.get("sub", "")
+    )
+
+    # Role from Keycloak realm_access, resource_access, or scope
     realm_roles = claims.get("realm_access", {}).get("roles", [])
-    role = "admin" if "admin" in realm_roles else "user"
+    resource_roles = claims.get("resource_access", {}).get("account", {}).get("roles", [])
+    scopes = claims.get("scope", "").split()
+    all_roles = set(realm_roles) | set(resource_roles) | set(scopes)
+    role = "admin" if ADMIN_ROLE_CLAIM in all_roles else "user"
 
+    logger.info("Auth: email=%s role=%s (verify=%s)", email, role, JWT_VERIFY)
     return AuthContext(email=email, role=role)
 
 

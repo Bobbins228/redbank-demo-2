@@ -7,7 +7,7 @@ Part of RHAISTRAT-1459 / RHAIENG-4556.
 ## Directory Layout
 
 ```
-redbank-demo-kagenti/
+redbank-demo-2/
 ├── postgres-db/              PostgreSQL schema, seed data, RLS policies
 │   ├── init.sql              Schema + RLS + seed data
 │   ├── init-db.sh            Startup init script
@@ -22,6 +22,9 @@ redbank-demo-kagenti/
 │   ├── Dockerfile
 │   ├── mcp-server.yaml       Deployment + Service (Kagenti labels)
 │   └── deploy.sh             OpenShift build + deploy
+├── scripts/
+│   ├── setup-keycloak.sh     Provision Keycloak realm, client, users, audience mapper
+│   └── cleanup.sh            Tear down deployed workloads
 ├── tests/
 │   └── test_mcp_rls.py       Integration tests (pytest)
 ├── Makefile
@@ -42,19 +45,28 @@ The MCP server is a [FastMCP](https://github.com/jlowin/fastmcp) application tha
 ```
 Agent (A2A/MCP client)
   │
-  │  Bearer JWT (from Keycloak via AuthBridge)
+  │  Authorization: Bearer <JWT>
   ▼
+┌──────────────────────────────────────────────┐
+│  AuthBridge Sidecar (Envoy + go-processor)   │
+│                                              │
+│  1. Validate JWT (signature, exp, issuer)    │
+│  2. Token exchange (RFC 8693) for tool aud   │
+│  3. Forward with exchanged Bearer token      │
+└──────────────────┬───────────────────────────┘
+                   │
+                   │  Authorization: Bearer <exchanged-JWT>
+                   ▼
 ┌──────────────────────────────────────────────┐
 │  FastMCP HTTP Server (:8000/mcp)             │
 │                                              │
-│  1. Extract JWT from Authorization header    │
-│  2. Decode claims (email, realm_access)      │
-│  3. Determine role: admin or user            │
-│  4. Check @admin_only (write tools)          │
-│  5. Open pooled DB connection                │
-│  6. SET app.current_role, app.current_email  │
-│  7. Execute query (RLS filters rows)         │
-│  8. Return structured result                 │
+│  1. Verify JWT (JWKS) or decode (trusted)    │
+│  2. Extract email + role from claims         │
+│  3. Check @admin_only (write tools)          │
+│  4. Open pooled DB connection                │
+│  5. SET app.current_role, app.current_email  │
+│  6. Execute query (RLS filters rows)         │
+│  7. Return structured result                 │
 └──────────────────┬───────────────────────────┘
                    │
                    ▼
@@ -69,15 +81,26 @@ Agent (A2A/MCP client)
 └──────────────────────────────────────────────┘
 ```
 
-### JWT Auth
+### AuthBridge Integration
 
-The server reads `Authorization: Bearer <token>` from the incoming MCP request. When `JWT_VERIFY=false` (the default for local dev), the token is decoded without signature verification — the assumption is that AuthBridge has already validated it upstream.
+In a Kagenti deployment, the AuthBridge sidecar (Envoy + go-processor) handles JWT validation and RFC 8693 token exchange automatically. The flow is:
 
-Identity is extracted from the JWT claims:
+1. Caller authenticates with Keycloak and receives a JWT
+2. Caller sends the request with `Authorization: Bearer <JWT>` to the MCP server
+3. The AuthBridge Envoy sidecar intercepts the request, validates the JWT (signature, expiration, issuer) via JWKS, and exchanges the token for an audience-scoped token targeting this tool
+4. The exchanged token reaches the MCP server container on the `Authorization` header
+
+The MCP server operates in two modes:
+
+**AuthBridge trusted mode** (`JWT_VERIFY=false`, default) — The sidecar has already validated the token. The server decodes the JWT without signature verification to extract identity claims. This is the standard Kagenti deployment model.
+
+**Standalone mode** (`JWT_VERIFY=true`) — No sidecar present. The server fetches signing keys from `JWKS_URL` (Keycloak JWKS endpoint) and verifies the JWT itself. Use for dev clusters without Kagenti or as defense-in-depth.
+
+Identity is extracted from Keycloak JWT claims:
 - **email**: `claims.email` → `claims.preferred_username` → `claims.sub` (fallback chain)
-- **role**: `"admin"` if `"admin"` is in `claims.realm_access.roles`, otherwise `"user"`
+- **role**: `"admin"` if the `ADMIN_ROLE_CLAIM` value (default `"admin"`) appears in `realm_access.roles`, `resource_access.account.roles`, or `scope`
 
-When no Bearer token is present, the server falls back to `DEFAULT_ROLE` and `DEFAULT_EMAIL` environment variables (admin by default for local dev convenience).
+When no Bearer token is present, the server falls back to `DEFAULT_ROLE` and `DEFAULT_EMAIL` environment variables. In production with AuthBridge, unauthenticated requests are rejected by the sidecar before they reach the MCP server.
 
 ### Row-Level Security
 
@@ -138,18 +161,63 @@ These enable the Kagenti operator to discover the MCP server automatically witho
 
 ## Deployment
 
-### Deploy to OpenShift/Kagenti
+All operations are driven through the Makefile. The default namespace is `redbank-demo` — override with `NAMESPACE=my-namespace`.
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `deploy-all` | Deploy everything (Postgres + MCP server) |
+| `deploy-db` | Create namespace and apply Kustomize (Secret + ConfigMap + Deployment + Service) |
+| `deploy-mcp` | Build MCP server image via `oc new-build` and deploy |
+| `setup-keycloak` | Provision Keycloak realm, client, audience mapper, roles, and demo users |
+| `clean` | Tear down deployed workloads (deployments, services, secrets, configmaps) |
+
+### Quick Start
 
 ```bash
-# Deploy everything (Postgres + MCP server)
+# 1. Deploy the database and MCP server
 make deploy-all
+# or with a custom namespace:
+NAMESPACE=my-namespace make deploy-all
 
-# Or step by step
-make deploy-db    # Creates namespace, applies Kustomize (ConfigMap + Deployment + Service + Secret)
-make deploy-mcp   # Builds image via oc new-build, deploys MCP server
+# 2. Configure Keycloak (creates realm, client, users, audience mapper)
+KEYCLOAK_ADMIN=<admin-user> KEYCLOAK_PASSWORD=<admin-password> make setup-keycloak
+
+# 3. Verify
+oc get pods
 ```
 
-The default namespace is `redbank-demo`. Override with `make deploy-all NAMESPACE=my-namespace`.
+### Keycloak Setup Details
+
+`make setup-keycloak` runs `scripts/setup-keycloak.sh`, which creates:
+
+- Realm `redbank` with client `redbank-mcp` (public, direct access grants enabled)
+- An audience mapper that adds `redbank-mcp` to the access token `aud` claim
+- Realm role `admin`
+- Users `john` (user) and `jane` (admin, with `admin` realm role)
+
+Required environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `KEYCLOAK_ADMIN` | Keycloak admin username |
+| `KEYCLOAK_PASSWORD` | Keycloak admin password |
+
+Optional — auto-detected from `oc get route keycloak -n keycloak` if not set:
+
+| Variable | Description |
+|----------|-------------|
+| `KEYCLOAK_URL` | Keycloak base URL (e.g. `https://keycloak.example.com`) |
+
+### Cleanup
+
+```bash
+make clean                         # uses default namespace
+NAMESPACE=my-namespace make clean  # override namespace
+```
+
+This removes deployments, services, secrets, and configmaps for both Postgres and the MCP server. It does not remove the namespace or Keycloak resources.
 
 ## Manual Testing
 
@@ -157,6 +225,7 @@ The default namespace is `redbank-demo`. Override with `make deploy-all NAMESPAC
 
 - OpenShift cluster with `oc` CLI authenticated
 - The demo is deployed (`make deploy-all`)
+- Keycloak realm configured (`make setup-keycloak`)
 - Port-forward is active in a separate terminal:
 
 ```bash
@@ -165,43 +234,48 @@ oc port-forward svc/redbank-mcp-server 8000:8000
 
 ### Step 1 — Verify database seed data
 
+Run from your local terminal (not inside the pod):
+
 ```bash
-oc rsh deployment/postgresql
-psql -U user -d db
+oc rsh deployment/postgresql psql -U user -d db -c "
+  SELECT set_config('app.current_role', 'admin', false);
+  SELECT set_config('app.current_user_email', 'jane@redbank.demo', false);
+  SELECT count(*) FROM customers;
+  SELECT count(*) FROM statements;
+  SELECT count(*) FROM transactions;
+  SELECT count(*) FROM user_accounts;
+"
 ```
 
-```sql
--- Set admin context to see all rows (RLS is enforced even for table owner)
-SELECT set_config('app.current_role', 'admin', false);
-SELECT set_config('app.current_user_email', 'jane@redbank.demo', false);
+Expected: 5 customers, 13 statements, 27 transactions, 2 user_accounts.
 
-SELECT count(*) FROM customers;       -- expect 5
-SELECT count(*) FROM statements;      -- expect 13
-SELECT count(*) FROM transactions;    -- expect 27
-SELECT count(*) FROM user_accounts;   -- expect 2
+Verify RLS is enabled and forced:
 
--- Verify RLS is enabled and forced
-SELECT relname, relrowsecurity, relforcerowsecurity
-FROM pg_class
-WHERE relname IN ('customers', 'statements', 'transactions');
--- expect all t / t
+```bash
+oc rsh deployment/postgresql psql -U user -d db -c "
+  SELECT set_config('app.current_role', 'admin', false);
+  SELECT relname, relrowsecurity, relforcerowsecurity
+  FROM pg_class
+  WHERE relname IN ('customers', 'statements', 'transactions');
+"
 ```
 
-### Step 2 — Verify RLS scoping in psql
+Expected: all rows show `t` / `t`.
 
-```sql
--- Switch to user context (John, customer_id=5)
-SELECT set_config('app.current_role', 'user', false);
-SELECT set_config('app.current_user_email', 'john@redbank.demo', false);
+### Step 2 — Verify RLS scoping
 
-SELECT customer_id, name FROM customers;
--- expect: only customer_id=5 (John Doe)
+Switch to John's user context and confirm he can only see his own data:
 
-SELECT count(*) FROM transactions;
--- expect: only John's transactions (8 from seed data)
+```bash
+oc rsh deployment/postgresql psql -U user -d db -c "
+  SELECT set_config('app.current_role', 'user', false);
+  SELECT set_config('app.current_user_email', 'john@redbank.demo', false);
+  SELECT customer_id, name FROM customers;
+  SELECT count(*) FROM transactions;
+"
 ```
 
-Exit with `\q` then `exit`.
+Expected: only customer_id=5 (John Doe), and only John's transactions (8 from seed data).
 
 ### Step 3 — Initialize an MCP session
 
@@ -236,32 +310,41 @@ curl -s http://localhost:8000/mcp \
 
 Expected: 5 tools (`get_customer`, `get_customer_transactions`, `get_account_summary`, `update_account`, `create_transaction`).
 
-### Step 5 — Admin read (no Bearer token)
+### Step 5 — Get Keycloak tokens
 
-Without a Bearer token, the server defaults to admin (`jane@redbank.demo`):
+Fetch real tokens from Keycloak for the demo users. Requires `make setup-keycloak` to have been run first.
+
+```bash
+# Get the Keycloak route from your cluster
+KEYCLOAK_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}')"
+
+# John (regular user)
+JOHN_JWT=$(curl -sf "${KEYCLOAK_URL}/realms/redbank/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=redbank-mcp" \
+  -d "username=john" \
+  -d "password=john123" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Jane (admin)
+JANE_JWT=$(curl -sf "${KEYCLOAK_URL}/realms/redbank/protocol/openid-connect/token" \
+  -d "grant_type=password" \
+  -d "client_id=redbank-mcp" \
+  -d "username=jane" \
+  -d "password=jane123" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+```
+
+### Step 6 — Admin read
 
 ```bash
 curl -s http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
+  -H "Authorization: Bearer $JANE_JWT" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_customer","arguments":{"email":"alice.johnson@email.com"}}}'
 ```
 
 Expected: Alice Johnson's full customer record.
-
-### Step 6 — Create a test JWT for John (user)
-
-Since `JWT_VERIFY=false`, the server accepts unsigned tokens:
-
-```bash
-JOHN_JWT=$(python3 -c "
-import base64, json
-header = base64.urlsafe_b64encode(json.dumps({'alg':'none','typ':'JWT'}).encode()).rstrip(b'=').decode()
-payload = base64.urlsafe_b64encode(json.dumps({'sub':'john','email':'john@redbank.demo','realm_access':{'roles':['user']}}).encode()).rstrip(b'=').decode()
-print(f'{header}.{payload}.')
-")
-```
 
 ### Step 7 — User read (RLS scoped)
 
@@ -311,6 +394,7 @@ curl -s http://localhost:8000/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -H "Mcp-Session-Id: $SESSION_ID" \
+  -H "Authorization: Bearer $JANE_JWT" \
   -d '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"update_account","arguments":{"customer_id":5,"phone":"555-9999"}}}'
 ```
 
@@ -328,15 +412,34 @@ oc get svc redbank-mcp-server -o jsonpath='{.metadata.labels.protocol\.kagenti\.
 
 ## Automated Tests
 
-Integration tests cover tool discovery, admin reads, user RLS scoping, and write enforcement:
+Integration tests cover tool discovery, admin reads, user RLS scoping, write enforcement, and Keycloak token acquisition.
+
+### Prerequisites
+
+- MCP server deployed and running
+- Port-forward active: `oc port-forward svc/redbank-mcp-server 8000:8000`
+- Keycloak realm configured: `make setup-keycloak`
+
+### Run
 
 ```bash
-cd product/rag/demos/redbank-demo-kagenti
 pip install requests pytest
 pytest tests/test_mcp_rls.py -v
 ```
 
-Requires a port-forward to be active (`oc port-forward svc/redbank-mcp-server 8000:8000`). Override the endpoint with `MCP_URL=http://host:port/mcp`.
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_URL` | `http://localhost:8000/mcp` | MCP server endpoint |
+| `KEYCLOAK_URL` | cluster route | Keycloak base URL |
+| `KEYCLOAK_REALM` | `redbank` | Keycloak realm |
+| `KEYCLOAK_CLIENT` | `redbank-mcp` | Keycloak client ID |
+| `JOHN_PASSWORD` | `john123` | Password for john |
+| `JANE_PASSWORD` | `jane123` | Password for jane |
+| `USE_FAKE_JWT` | `false` | Set `true` to use unsigned JWTs (for `JWT_VERIFY=false` mode) |
+
+By default, tests fetch real access tokens from Keycloak. Set `USE_FAKE_JWT=true` for local dev without Keycloak.
 
 ## Environment Variables
 
@@ -351,16 +454,28 @@ Requires a port-forward to be active (`oc port-forward svc/redbank-mcp-server 80
 | `POSTGRES_USER` | `user` | Database user |
 | `POSTGRES_PASSWORD` | `pass` | Database password |
 | `POSTGRES_PORT` | `5432` | Database port |
-| `JWT_VERIFY` | `false` | Enable JWT signature verification |
+| `JWT_VERIFY` | `false` | `false` = trust AuthBridge sidecar; `true` = verify JWT via JWKS |
 | `JWT_ALGORITHMS` | `RS256` | Comma-separated JWT algorithms |
-| `JWKS_URL` | (empty) | Keycloak JWKS endpoint for key retrieval |
-| `JWT_AUDIENCE` | (empty) | Expected JWT audience claim |
+| `JWKS_URL` | (empty) | Keycloak JWKS endpoint (required when `JWT_VERIFY=true`) |
+| `JWT_AUDIENCE` | (empty) | Expected JWT `aud` claim. Use `account` for default Keycloak tokens, or `redbank-mcp` after adding an audience mapper. Tokens are rejected if the claim doesn't match. |
+| `ADMIN_ROLE_CLAIM` | `admin` | Role name that grants admin access |
 | `DEFAULT_ROLE` | `admin` | Fallback role when no Bearer token present |
 | `DEFAULT_EMAIL` | `jane@redbank.demo` | Fallback email when no Bearer token present |
 
 ### Production Configuration
 
-For production with AuthBridge, set these env vars on the MCP server Deployment:
+**With AuthBridge sidecar** (standard Kagenti deployment) — the sidecar validates and exchanges tokens upstream. The MCP server decodes the trusted token without re-verifying the signature:
+
+```yaml
+- name: JWT_VERIFY
+  value: "false"
+- name: JWT_AUDIENCE
+  value: "redbank-mcp"   # AuthBridge token exchange sets this audience
+- name: DEFAULT_ROLE
+  value: "user"           # fail-safe: no token = restricted access
+```
+
+**Standalone deployment** (no AuthBridge, e.g. dev cluster) — the MCP server verifies JWT signatures directly via JWKS:
 
 ```yaml
 - name: JWT_VERIFY
@@ -368,7 +483,7 @@ For production with AuthBridge, set these env vars on the MCP server Deployment:
 - name: JWKS_URL
   value: "https://keycloak.example.com/realms/redbank/protocol/openid-connect/certs"
 - name: JWT_AUDIENCE
-  value: "redbank-mcp"
+  value: "account"        # or "redbank-mcp" if audience mapper is configured
 - name: DEFAULT_ROLE
-  value: "user"  # fail-safe: no token = restricted access
+  value: "user"           # fail-safe: no token = restricted access
 ```
