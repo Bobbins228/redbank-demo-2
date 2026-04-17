@@ -135,6 +135,21 @@ INSERT INTO user_accounts (email, customer_id, role) VALUES
 ON CONFLICT (email) DO NOTHING;
 
 -- =============================================================================
+-- Application Role
+-- =============================================================================
+--
+-- The community pgvector image creates $POSTGRESQL_USER as a superuser.
+-- Superusers always bypass RLS, so we create a non-superuser app role
+-- for application connections (MCP server, pipeline, notebook).
+-- =============================================================================
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app') THEN
+        CREATE ROLE app WITH LOGIN PASSWORD 'app';
+    END IF;
+END $$;
+
+-- =============================================================================
 -- Ownership & Grants
 -- =============================================================================
 
@@ -143,14 +158,14 @@ ALTER TABLE statements OWNER TO "$POSTGRESQL_USER";
 ALTER TABLE transactions OWNER TO "$POSTGRESQL_USER";
 ALTER TABLE user_accounts OWNER TO "$POSTGRESQL_USER";
 
-GRANT ALL PRIVILEGES ON TABLE customers TO "$POSTGRESQL_USER";
-GRANT ALL PRIVILEGES ON TABLE statements TO "$POSTGRESQL_USER";
-GRANT ALL PRIVILEGES ON TABLE transactions TO "$POSTGRESQL_USER";
-GRANT ALL PRIVILEGES ON TABLE user_accounts TO "$POSTGRESQL_USER";
+GRANT ALL PRIVILEGES ON TABLE customers TO app;
+GRANT ALL PRIVILEGES ON TABLE statements TO app;
+GRANT ALL PRIVILEGES ON TABLE transactions TO app;
+GRANT ALL PRIVILEGES ON TABLE user_accounts TO app;
 
-GRANT ALL PRIVILEGES ON SEQUENCE customers_customer_id_seq TO "$POSTGRESQL_USER";
-GRANT ALL PRIVILEGES ON SEQUENCE statements_statement_id_seq TO "$POSTGRESQL_USER";
-GRANT ALL PRIVILEGES ON SEQUENCE transactions_transaction_id_seq TO "$POSTGRESQL_USER";
+GRANT ALL PRIVILEGES ON SEQUENCE customers_customer_id_seq TO app;
+GRANT ALL PRIVILEGES ON SEQUENCE statements_statement_id_seq TO app;
+GRANT ALL PRIVILEGES ON SEQUENCE transactions_transaction_id_seq TO app;
 
 -- =============================================================================
 -- Row-Level Security
@@ -252,6 +267,8 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE INDEX IF NOT EXISTS idx_embeddings_collection ON embeddings(collection);
 
 ALTER TABLE embeddings OWNER TO "$POSTGRESQL_USER";
+
+GRANT ALL PRIVILEGES ON TABLE embeddings TO app;
 
 ALTER TABLE embeddings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE embeddings FORCE ROW LEVEL SECURITY;

@@ -100,8 +100,8 @@ def pgvector_rag_pipeline(
     pg_host: str = "postgresql.redbank-demo.svc.cluster.local",
     pg_port: str = "5432",
     pg_database: str = "db",
-    pg_user: str = "user",
-    pg_password: str = "pass",
+    pg_user: str = "app",
+    pg_password: str = "app",
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
 ):

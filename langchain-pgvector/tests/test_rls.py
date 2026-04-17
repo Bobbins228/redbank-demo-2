@@ -2,7 +2,7 @@
 
 import pytest
 import psycopg
-from conftest import PG_USER, PG_PASSWORD, _to_psycopg_dsn
+from conftest import APP_USER, APP_PASSWORD, _to_psycopg_dsn
 
 
 # Fake 768-dim zero vector literal for seeding
@@ -81,7 +81,7 @@ class TestUserAccess:
 
     def test_cannot_insert(self, pg_container, seeded_data):
         dsn = _to_psycopg_dsn(pg_container.get_connection_url())
-        dsn = dsn.replace("postgres:postgres", f"{PG_USER}:{PG_PASSWORD}")
+        dsn = dsn.replace("postgres:postgres", f"{APP_USER}:{APP_PASSWORD}")
         with psycopg.connect(dsn, autocommit=False) as conn:
             conn.execute("SELECT set_config('app.current_role', 'user', false)")
             with pytest.raises(psycopg.errors.InsufficientPrivilege):

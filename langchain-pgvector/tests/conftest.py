@@ -11,6 +11,8 @@ INIT_SQL = Path(__file__).resolve().parents[2] / "postgres-db" / "init.sql"
 PG_USER = "user"
 PG_PASSWORD = "pass"
 PG_DATABASE = "db"
+APP_USER = "app"
+APP_PASSWORD = "app"
 
 
 def _to_psycopg_dsn(url: str) -> str:
@@ -77,9 +79,9 @@ def pg_container():
 
 
 def _app_conn(pg_container, role: str) -> psycopg.Connection:
-    """Open a connection as the table owner and set app.current_role."""
+    """Open a connection as the non-superuser app role and set app.current_role."""
     dsn = _to_psycopg_dsn(pg_container.get_connection_url())
-    dsn = dsn.replace("postgres:postgres", f"{PG_USER}:{PG_PASSWORD}")
+    dsn = dsn.replace("postgres:postgres", f"{APP_USER}:{APP_PASSWORD}")
     conn = psycopg.connect(dsn, autocommit=True)
     conn.execute("SELECT set_config('app.current_role', %s, false)", [role])
     return conn

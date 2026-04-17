@@ -8,9 +8,9 @@
 #    chunk_size: int [Default: 1000.0]
 #    pg_database: str [Default: 'db']
 #    pg_host: str [Default: 'postgresql.redbank-demo.svc.cluster.local']
-#    pg_password: str [Default: 'pass']
+#    pg_password: str [Default: 'app']
 #    pg_port: str [Default: '5432']
-#    pg_user: str [Default: 'user']
+#    pg_user: str [Default: 'app']
 #    user_filenames: str [Default: 'user/redbank_account_selfservice.pdf,user/redbank_password_and_security.pdf,user/redbank_payments_and_transfers.pdf']
 components:
   comp-ingest-documents:
@@ -284,7 +284,7 @@ root:
         isOptional: true
         parameterType: STRING
       pg_password:
-        defaultValue: pass
+        defaultValue: app
         isOptional: true
         parameterType: STRING
       pg_port:
@@ -292,7 +292,7 @@ root:
         isOptional: true
         parameterType: STRING
       pg_user:
-        defaultValue: user
+        defaultValue: app
         isOptional: true
         parameterType: STRING
       user_filenames:
