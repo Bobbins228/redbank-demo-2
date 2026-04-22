@@ -1,0 +1,10 @@
+nameOverride: "redbank-orchestrator"
+
+extraLabels:
+  protocol.kagenti.io/a2a: ""
+
+agentRuntime:
+  enabled: true
+env:
+  MODEL_ID: ""
+  BASE_URL: ""

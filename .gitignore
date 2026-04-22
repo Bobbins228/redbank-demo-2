@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 pytest-logs.txt
 .env
+!.env.example
+*.egg-info/
+.DS_Store
+**/.DS_Store
