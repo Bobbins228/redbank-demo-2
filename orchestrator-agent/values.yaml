@@ -6,5 +6,5 @@ extraLabels:
 agentRuntime:
   enabled: true
 env:
-  MODEL_ID: ""
-  BASE_URL: ""
+  LLM_MODEL: ""
+  LLM_BASE_URL: ""

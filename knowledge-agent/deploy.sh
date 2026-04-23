@@ -40,7 +40,7 @@ function setup() {
 
   cd "${SCRIPT_FOLDER}"
 
-  _out Building knowledge agent image
+  _out "Building knowledge agent image"
   oc new-build --name build-redbank-knowledge-agent --binary --strategy docker \
     --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-knowledge-agent:latest" 2>/dev/null || true
   oc start-build build-redbank-knowledge-agent --from-dir=. --follow

@@ -24,6 +24,12 @@ function setup() {
 
   oc new-project "${ns}" 2>/dev/null || oc project "${ns}"
 
+  _out "Creating/updating pgvector-credentials secret"
+  oc create secret generic pgvector-credentials \
+    --from-literal=PGVECTOR_USER="${PGVECTOR_USER:-app}" \
+    --from-literal=PGVECTOR_PASSWORD="${PGVECTOR_PASSWORD:-app}" \
+    --dry-run=client -o yaml | oc apply -f -
+
   cd "${SCRIPT_FOLDER}"
 
   _out Building MCP server image

@@ -7,7 +7,7 @@ Spin up two mock A2A agents for testing the orchestrator end-to-end.
 
 Usage:
     # Terminal 1: start the mock agents
-    cd agents/langgraph/redbank_orchestrator
+    cd orchestrator-agent
     uv run python examples/mock_agents.py
 
     # Terminal 2: start the orchestrator

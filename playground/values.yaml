@@ -2,6 +2,6 @@ nameOverride: "redbank-playground"
 
 env:
   ORCHESTRATOR_URL: ""
-  KEYCLOAK_URL: "https://keycloak-keycloak.apps.rosa.redbank-demo2.ij5f.p3.openshiftapps.com"
-  KEYCLOAK_REALM: "redbank"
-  KEYCLOAK_CLIENT_ID: "redbank-mcp"
+  KEYCLOAK_URL: ""
+  KEYCLOAK_REALM: ""
+  KEYCLOAK_CLIENT_ID: ""

@@ -8,55 +8,78 @@ Part of RHAISTRAT-1459 / RHAIENG-4555 (Epic) / RHAIENG-4556 (MCP Server) / RHAIE
 
 ```
 redbank-demo-2/
-├── postgres-db/              PostgreSQL schema, seed data, RLS policies
-│   ├── init.sql              Schema + RLS + seed data
-│   ├── init-db.sh            Startup init script
-│   ├── postgres.yaml         Secret + Deployment + Service
+├── .env.example                  Consolidated deployment config template
+├── Makefile                      Single Makefile for all deployment targets
+├── postgres-db/                  PostgreSQL schema, seed data, RLS policies
+│   ├── init.sql                  Schema + RLS + seed data
+│   ├── init-db.sh                Startup init script
+│   ├── postgres.yaml             Secret + Deployment + Service
 │   └── kustomization.yaml
-├── langchain-pgvector/        LangChain + PGVector RAG pipeline
-│   ├── tests/                 Schema + RLS tests (testcontainers)
-│   ├── pipeline/              KFP ingestion pipeline
-│   ├── notebook/              Query notebook (admin vs user RLS demo)
+├── langchain-pgvector/           LangChain + PGVector RAG pipeline
+│   ├── tests/                    Schema + RLS tests (testcontainers)
+│   ├── pipeline/                 KFP ingestion pipeline
+│   ├── notebook/                 Query notebook (admin vs user RLS demo)
 │   └── requirements.txt
-├── mcp-server/               FastMCP server with auth-aware tools
+├── mcp-server/                   FastMCP server with auth-aware tools
 │   ├── redbank-mcp/
-│   │   ├── mcp_server.py     Tool definitions + JWT auth
-│   │   ├── database_manager.py  Connection pool + RLS context
+│   │   ├── mcp_server.py         Tool definitions + JWT auth
+│   │   ├── database_manager.py   Connection pool + RLS context
 │   │   └── logger.py
 │   ├── requirements.txt
 │   ├── Dockerfile
-│   ├── mcp-server.yaml       Deployment + Service
-│   ├── agentruntime.yaml     AgentRuntime CR (type: tool)
-│   └── deploy.sh             OpenShift build + deploy
-├── banking-agent/            A2A Banking Operations Agent (Agent C — admin CRUD)
-│   ├── banking_agent/
-│   │   ├── __main__.py       A2A server startup, agent card, MLflow init
-│   │   ├── agent.py          LangGraph ReAct agent + MCP client setup
-│   │   └── agent_executor.py A2A <-> LangGraph bridge with token propagation
-│   ├── requirements.txt
+│   ├── mcp-server.yaml           Deployment + Service
+│   ├── agentruntime.yaml         AgentRuntime CR (type: tool)
+│   └── deploy.sh                 OpenShift build + deploy
+├── banking-agent/                A2A Banking Operations Agent (Agent C — admin CRUD)
+│   ├── src/banking_agent/
+│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── agent.py              LangGraph ReAct agent + MCP client setup
+│   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
+│   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── banking-agent.yaml    Deployment + Service
-│   ├── agentruntime.yaml     AgentRuntime CR (type: agent)
-│   └── deploy.sh             OpenShift build + deploy
-├── knowledge-agent/          A2A Knowledge Agent (Agent B — read-only RAG + data)
-│   ├── knowledge_agent/
-│   │   ├── __main__.py       A2A server startup, agent card, MLflow init
-│   │   ├── agent.py          LangGraph ReAct agent + allow-list filter
-│   │   └── agent_executor.py A2A <-> LangGraph bridge with token propagation
-│   ├── tests/                Unit tests (mocked, no infra needed)
-│   ├── requirements.txt
+│   ├── banking-agent.yaml        Deployment + Service
+│   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
+│   └── deploy.sh                 OpenShift build + deploy
+├── knowledge-agent/              A2A Knowledge Agent (Agent B — read-only RAG + data)
+│   ├── src/knowledge_agent/
+│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── agent.py              LangGraph ReAct agent + allow-list filter
+│   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
+│   ├── tests/                    Unit tests (mocked, no infra needed)
+│   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── knowledge-agent.yaml  Deployment + Service
-│   ├── agentruntime.yaml     AgentRuntime CR (type: agent)
-│   └── deploy.sh             OpenShift build + deploy
+│   ├── knowledge-agent.yaml      Deployment + Service
+│   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
+│   └── deploy.sh                 OpenShift build + deploy
+├── orchestrator-agent/           A2A Orchestrator Agent (Agent A — intent routing)
+│   ├── src/redbank_orchestrator/
+│   │   ├── server.py             Starlette app, A2A + /chat/completions + re-discovery
+│   │   ├── agent.py              LangGraph agent builder from discovered peers
+│   │   ├── discovery.py          Peer discovery via K8s AgentCard CRDs
+│   │   ├── k8s_discovery.py      Kubernetes API client for AgentCard lookup
+│   │   ├── a2a_client.py         A2A message sender with token forwarding
+│   │   ├── tools.py              Dynamic tool creation from peer agent cards
+│   │   └── tracing.py            MLflow autolog configuration
+│   ├── charts/agent/             Helm chart for deployment
+│   ├── examples/mock_agents.py   Mock agents for local testing
+│   ├── tests/                    Unit tests
+│   ├── pyproject.toml + uv.lock
+│   ├── Dockerfile
+│   └── deploy.sh                 OpenShift build + Helm deploy
+├── playground/                   Standalone chat UI for the orchestrator
+│   ├── playground/templates/     HTML chat interface
+│   ├── server.py                 Starlette proxy (auth, chat, health)
+│   ├── charts/agent/             Helm chart for deployment
+│   ├── pyproject.toml
+│   ├── Dockerfile
+│   └── deploy.sh                 OpenShift build + Helm deploy
 ├── scripts/
-│   ├── setup-keycloak.sh     Provision Keycloak realm, client, users, audience mapper
-│   ├── test-knowledge-agent.sh  Manual A2A agent test with Keycloak JWTs
-│   ├── test-search-knowledge.sh Manual MCP tool test with Keycloak JWTs
-│   └── cleanup.sh            Tear down deployed workloads
+│   ├── setup-keycloak.sh         Provision Keycloak realm, client, users, audience mapper
+│   ├── test-knowledge-agent.sh   Manual A2A agent test with Keycloak JWTs
+│   ├── test-search-knowledge.sh  Manual MCP tool test with Keycloak JWTs
+│   └── cleanup.sh                Tear down deployed workloads + Keycloak realm
 ├── tests/
-│   └── test_mcp_rls.py       MCP-level integration tests (pytest)
-├── Makefile
+│   └── test_mcp_rls.py           MCP-level integration tests (pytest)
 └── README.md
 ```
 
@@ -191,6 +214,7 @@ Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom
 | `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | `protocol.kagenti.io/mcp: "true"` (Service) |
 | `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
 | `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
+| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment) |
 
 The `kagenti.io/type` label on Deployments is managed by the operator — do not set it manually. Protocol labels on Services (`protocol.kagenti.io/a2a`, `protocol.kagenti.io/mcp`) remain in the Service manifests since they drive AgentCard sync and tool discovery independently.
 
@@ -202,11 +226,13 @@ oc get agentruntimes
 # redbank-banking-agent-runtime       agent   redbank-banking-agent     Active  ...
 # redbank-knowledge-agent-runtime     agent   redbank-knowledge-agent   Active  ...
 # redbank-mcp-server-runtime          tool    redbank-mcp-server        Active  ...
+# redbank-orchestrator-runtime        agent   redbank-orchestrator      Active  ...
 
 oc get agentcards
 # NAME                                      PROTOCOL   KIND         TARGET                    AGENT                     SYNCED
 # redbank-banking-agent-deployment-card      a2a        Deployment   redbank-banking-agent     RedBank Banking...        True
 # redbank-knowledge-agent-deployment-card    a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...      True
+# redbank-orchestrator-deployment-card       a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...   True
 ```
 
 ### Banking Operations Agent (Agent C)
@@ -262,15 +288,49 @@ The Knowledge Agent is a read-only A2A service built with LangGraph that provide
 - **AgentRuntime**: `redbank-knowledge-agent-runtime` (type: `agent`)
 - **Deployment + Service**: `protocol.kagenti.io/a2a: ""` label for AgentCard discovery
 
-### Orchestrator Integration (RHAIENG-4560)
+### Orchestrator Agent (Agent A)
 
-Agent C is designed to be called by the Orchestrator Agent (Agent A) via A2A. The orchestrator classifies user intent and routes write operations (update account, create transaction) to this agent while sending read-only queries to the Knowledge Agent (Agent B).
+The Orchestrator Agent is the entry point for user interactions. It classifies user intent and routes queries to specialist agents (Knowledge or Banking) via A2A protocol. It discovers peers dynamically via Kubernetes AgentCard CRDs and rebuilds its routing graph every 15 seconds when peers change.
+
+**Architecture:**
+- **Protocol**: A2A + OpenAI-compatible `/chat/completions` HTTP endpoint (with SSE streaming)
+- **Agent framework**: LangGraph `create_agent` with dynamic tools built from discovered peer agent cards
+- **Discovery**: Queries `AgentCard` CRDs (`agent.kagenti.dev/v1alpha1`) with `protocol.kagenti.io/a2a` labels — no manual configuration needed
+- **LLM**: Configurable via `LLM_BASE_URL`, `LLM_MODEL`, `OPENAI_API_KEY`
+- **Observability**: MLflow LangChain autolog (optional via `MLFLOW_TRACKING_URI`)
+- **State**: Module-level `MemorySaver` checkpointer preserves conversation context across graph rebuilds
+- **Deployment**: Helm chart (`charts/agent/`) with `values.yaml` for configuration
+
+**Dynamic routing:**
+- Each discovered peer becomes a LangChain `StructuredTool` with name and description derived from the peer's agent card
+- The system prompt is rebuilt dynamically from discovered agent card metadata (names, descriptions, skills, examples)
+- If no peers are discovered, the orchestrator informs the user that the system is starting up
+
+**Token propagation:**
+1. User sends request with `Authorization: Bearer <JWT>` to `/chat/completions`
+2. Orchestrator extracts the token and passes it through the LangGraph `RunnableConfig` as `auth_token`
+3. Each peer tool forwards the token in the A2A `Authorization` header
+4. Downstream agents pass it to the MCP server for RLS enforcement
+
+### Playground UI
+
+The Playground is a standalone Starlette web app that provides a chat interface for the orchestrator. It handles Keycloak OIDC authentication directly and proxies all `/chat/completions` requests to the orchestrator backend.
+
+**Features:**
+- HTML chat interface served at `/`
+- Keycloak OIDC auth (`/auth/config`, `/auth/token`) — server-side proxy avoids CORS issues
+- Proxies `/chat/completions` and `/health` to the orchestrator (supports SSE streaming)
+- Configurable via `ORCHESTRATOR_URL`, `KEYCLOAK_*` env vars
+
+### Agent Integration
+
+The Banking Agent (Agent C) and Knowledge Agent (Agent B) are designed to be called by the Orchestrator via A2A. The orchestrator classifies user intent and routes write operations (update account, create transaction) to the Banking Agent while sending read-only queries to the Knowledge Agent.
 
 **Integration points:**
-- **Discovery**: The orchestrator discovers Agent C via `protocol.kagenti.io/a2a` service labels
-- **A2A protocol**: Agent C accepts `message/send` JSON-RPC requests at its service URL
-- **Token propagation**: The orchestrator forwards the user's Bearer JWT in the `Authorization` header. Agent C passes it through to the MCP server, preserving the full identity chain.
-- **Access gating**: With AuthBridge deployed, non-admin users are rejected at the network level (Tier 1) before reaching Agent C. Without AuthBridge, the MCP server's `@admin_only` decorator enforces this at the tool level (Tier 2).
+- **Discovery**: The orchestrator discovers peers via `protocol.kagenti.io/a2a` service labels
+- **A2A protocol**: Agents accept `message/send` JSON-RPC requests at their service URL
+- **Token propagation**: The orchestrator forwards the user's Bearer JWT in the `Authorization` header. Agents pass it through to the MCP server, preserving the full identity chain.
+- **Access gating**: With AuthBridge deployed, non-admin users are rejected at the network level (Tier 1) before reaching the Banking Agent. Without AuthBridge, the MCP server's `@admin_only` decorator enforces this at the tool level (Tier 2).
 
 ## RAG Pipeline (LangChain + PGVector)
 
@@ -340,7 +400,7 @@ Compile the pipeline: `make compile-pipeline`
 
 ### PostgreSQL Infrastructure
 
-`postgres-db/init.sql` includes the pgvector extension (`CREATE EXTENSION IF NOT EXISTS vector`), `embeddings` table, and role-based RLS policies alongside the existing MCP schema. `postgres-db/postgres.yaml` uses the `quay.io/mcampbel/pgvector:pg16` image (community PostgreSQL with pgvector pre-installed) and includes:
+`postgres-db/init.sql` includes the pgvector extension (`CREATE EXTENSION IF NOT EXISTS vector`), `embeddings` table, and role-based RLS policies alongside the existing MCP schema. `postgres-db/postgres.yaml` uses the `pgvector/pgvector:pg16` image (community PostgreSQL with pgvector pre-installed) and includes:
 
 - A **PersistentVolumeClaim** (`postgres-pvc`, 10Gi) mounted at `/var/lib/postgresql/data` for data persistence
 - **`PGDATA`** set to a subdirectory (`/var/lib/postgresql/data/pgdata`) to avoid the `lost+found` conflict on PVC mount points
@@ -355,40 +415,29 @@ make test-pgvector   # requires Podman
 
 ## Deployment
 
-All operations are driven through the Makefile. The default namespace is `redbank-demo` — override with `NAMESPACE=my-namespace`.
+All deployment is driven through a single top-level `Makefile` and `.env` file. There are no individual Makefiles in subdirectories — each component has a `deploy.sh` script called by the Makefile.
 
-### Makefile Targets
+### Prerequisites
 
-| Target | Description |
-|--------|-------------|
-| `deploy-all` | Deploy everything (Postgres + MCP server + Banking Agent + Knowledge Agent) |
-| `deploy-db` | Create namespace and apply Kustomize (Secret + ConfigMap + Deployment + Service) |
-| `deploy-mcp` | Build MCP server image via `oc new-build` and deploy |
-| `deploy-agent-c` | Build Banking Operations Agent image and deploy |
-| `deploy-knowledge-agent` | Build Knowledge Agent image and deploy |
-| `setup-keycloak` | Provision Keycloak realm, client, audience mapper, roles, and demo users |
-| `test-pgvector` | Run pgvector schema + RLS tests (requires Podman) |
-| `test-knowledge-agent` | Run manual A2A tests against the Knowledge Agent with Keycloak JWTs |
-| `compile-pipeline` | Compile the KFP pipeline to YAML |
-| `clean` | Tear down deployed workloads (deployments, services, secrets, configmaps, PVC) |
-
-> **Note:** Tier 1 access gating (non-admin rejection at the network level) requires the Kagenti AuthBridge sidecar, which is injected by the Kagenti operator. Without it, the MCP server's `@admin_only` decorator still enforces write restrictions at the tool level (Tier 2), and RLS enforces read scoping at the database level.
+- OpenShift cluster with `oc` CLI authenticated
+- Keycloak deployed (the setup script provisions a realm and demo users)
+- `helm` CLI installed (for orchestrator and playground)
+- An OpenAI-compatible LLM endpoint (e.g. vLLM)
 
 ### Quick Start
 
 ```bash
-# 1. Deploy the database and MCP server
-make deploy-db deploy-mcp
+# 1. Create .env from template
+make init
 
-# 2. Configure Keycloak (creates realm, client, users, audience mapper)
-KEYCLOAK_ADMIN=<admin-user> KEYCLOAK_PASSWORD=<admin-password> make setup-keycloak
+# 2. Edit .env with your configuration (see below)
+vi .env
 
-# 3. Grant schema CREATE to 'app' role (required for PGVector metadata tables)
+# 3. Deploy everything (Keycloak setup + DB + MCP + agents + playground)
+make deploy
+
+# 4. Grant schema CREATE to 'app' role (required for PGVector metadata tables)
 oc exec deployment/postgresql -- psql -U user -d db -c "GRANT CREATE ON SCHEMA public TO app;"
-
-# 4. Deploy agents (requires LLM config)
-LLM_BASE_URL=<vllm-endpoint>/v1 LLM_MODEL=<model-name> make deploy-agent-c
-LLM_BASE_URL=<vllm-endpoint>/v1 LLM_MODEL=<model-name> make deploy-knowledge-agent
 
 # 5. Ingest documents into PGVector (compile + run KFP pipeline)
 make compile-pipeline
@@ -400,50 +449,80 @@ oc get agentruntimes
 oc get agentcards
 ```
 
-Or deploy everything at once:
+### Environment Variables (.env)
+
+All configuration lives in a single `.env` file at the project root. Run `make init` to create it from `.env.example`.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `NAMESPACE` | yes | `redbank-demo` | OpenShift namespace for all workloads |
+| `OPENAI_API_KEY` | yes | | API key for the LLM endpoint (vLLM or OpenAI) |
+| `LLM_BASE_URL` | yes | | LLM base URL (e.g. `https://vllm.example.com/v1`) |
+| `LLM_MODEL` | yes | | Model name (e.g. `llama-scout-17b`) |
+| `KEYCLOAK_ADMIN` | yes | `admin` | Keycloak admin username (for setup and cleanup) |
+| `KEYCLOAK_PASSWORD` | yes | | Keycloak admin password |
+| `KEYCLOAK_HOST` | no | auto-detected | Keycloak hostname for MCP server JWKS URL |
+| `PGVECTOR_USER` | no | `app` | PGVector database user |
+| `PGVECTOR_PASSWORD` | no | `app` | PGVector database password |
+| `ORCHESTRATOR_URL` | no | auto-derived | Playground → orchestrator URL (derived from NAMESPACE) |
+| `KEYCLOAK_URL` | no | | Playground Keycloak OIDC base URL |
+| `KEYCLOAK_REALM` | no | | Playground Keycloak realm |
+| `KEYCLOAK_CLIENT_ID` | no | | Playground Keycloak client ID |
+| `MLFLOW_TRACKING_URI` | no | auto-detected | MLflow tracking endpoint |
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make help` | Show all available targets |
+| `make init` | Create `.env` from `.env.example` |
+| `make deploy` | Deploy everything (Keycloak + DB + MCP + all agents + playground) |
+| `make setup-keycloak` | Provision Keycloak realm, client, audience mapper, roles, and demo users |
+| `make deploy-db` | Create namespace and apply Kustomize (Secret + ConfigMap + Deployment + Service) |
+| `make deploy-mcp` | Build MCP server image via `oc new-build` and deploy |
+| `make deploy-banking` | Build and deploy Banking Operations Agent |
+| `make deploy-knowledge` | Build and deploy Knowledge Agent |
+| `make deploy-orchestrator` | Build and deploy Orchestrator Agent (Helm) |
+| `make deploy-playground` | Build and deploy Playground UI (Helm) |
+| `make clean` | Tear down all workloads + Keycloak realm (keeps namespace and build configs) |
+| `make test-pgvector` | Run pgvector schema + RLS tests (requires Podman) |
+| `make test-knowledge-agent` | Run A2A tests against Knowledge Agent with Keycloak JWTs |
+| `make compile-pipeline` | Compile the KFP pipeline to YAML |
+
+`make deploy` runs the targets in order: `setup-keycloak` → `deploy-db` → `deploy-mcp` → `deploy-banking` → `deploy-knowledge` → `deploy-orchestrator` → `deploy-playground`.
+
+### Deploy Individual Components
+
+You can deploy components individually after the initial setup:
 
 ```bash
-LLM_BASE_URL=<vllm-endpoint>/v1 LLM_MODEL=<model-name> make deploy-all
+make deploy-orchestrator   # rebuild and redeploy just the orchestrator
+make deploy-playground     # rebuild and redeploy just the playground
 ```
-
-### Keycloak Setup Details
-
-`make setup-keycloak` runs `scripts/setup-keycloak.sh`, which creates:
-
-- Realm `redbank` with client `redbank-mcp` (public, direct access grants enabled)
-- An audience mapper that adds `redbank-mcp` to the access token `aud` claim
-- Realm role `admin`
-- Users `john` (user) and `jane` (admin, with `admin` realm role)
-
-Required environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `KEYCLOAK_ADMIN` | Keycloak admin username |
-| `KEYCLOAK_PASSWORD` | Keycloak admin password |
-
-Optional — auto-detected from `oc get route keycloak -n keycloak` if not set:
-
-| Variable | Description |
-|----------|-------------|
-| `KEYCLOAK_URL` | Keycloak base URL (e.g. `https://keycloak.example.com`) |
 
 ### Cleanup
 
 ```bash
-make clean                         # uses default namespace
-NAMESPACE=my-namespace make clean  # override namespace
+make clean
 ```
 
-This removes AgentRuntime CRs, deployments, services, secrets, and configmaps. It does not remove the namespace or Keycloak resources.
+This removes:
+- All AgentRuntime CRs
+- Agent deployments and services
+- Helm releases (orchestrator + playground)
+- PostgreSQL deployment, service, and PVC
+- Secrets and configmaps
+- Keycloak `redbank` realm (including users, client, roles)
+
+The namespace and OpenShift build configs are retained.
+
+> **Note:** Tier 1 access gating (non-admin rejection at the network level) requires the Kagenti AuthBridge sidecar, which is injected by the Kagenti operator. Without it, the MCP server's `@admin_only` decorator still enforces write restrictions at the tool level (Tier 2), and RLS enforces read scoping at the database level.
 
 ## Manual Testing
 
 ### Prerequisites
 
-- OpenShift cluster with `oc` CLI authenticated
-- The demo is deployed (`make deploy-all`)
-- Keycloak realm configured (`make setup-keycloak`)
+- The demo is deployed (`make deploy`)
 - Port-forward is active in a separate terminal:
 
 ```bash
@@ -530,10 +609,9 @@ Expected: 6 tools (`get_customer`, `get_customer_transactions`, `get_account_sum
 
 ### Step 5 — Get Keycloak tokens
 
-Fetch real tokens from Keycloak for the demo users. Requires `make setup-keycloak` to have been run first.
+Fetch real tokens from Keycloak for the demo users. Requires `make setup-keycloak` to have been run first (this is included in `make deploy`).
 
 ```bash
-# Get the Keycloak route from your cluster
 KEYCLOAK_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}')"
 
 # John (regular user)
@@ -644,59 +722,11 @@ oc port-forward svc/redbank-knowledge-agent 8002:8002
 bash scripts/test-knowledge-agent.sh
 ```
 
-**Manual curl commands:**
-
-```bash
-# Get Keycloak tokens
-KEYCLOAK_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}')"
-JANE_TOKEN=$(curl -sk "${KEYCLOAK_URL}/realms/redbank/protocol/openid-connect/token" -d "grant_type=password" -d "client_id=redbank-mcp" -d "username=jane" -d "password=jane123" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-JOHN_TOKEN=$(curl -sk "${KEYCLOAK_URL}/realms/redbank/protocol/openid-connect/token" -d "grant_type=password" -d "client_id=redbank-mcp" -d "username=john" -d "password=john123" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# Port-forward the knowledge agent (if not already running)
-oc port-forward svc/redbank-knowledge-agent 8002:8002 &
-
-# Admin-only doc: Jane (admin) sees compliance procedures
-curl -s http://localhost:8002 -H "Content-Type: application/json" -H "Authorization: Bearer ${JANE_TOKEN}" -d '{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"What is the compliance procedure for suspicious transactions?"}],"messageId":"1"}}}' | python3 -m json.tool
-# Expected: detailed answer with CTR filing, OFAC screening, complaint handling from admin docs
-# Example response:
-#   "The compliance procedure for suspicious transactions includes:
-#    1. Filing a Currency Transaction Report (CTR) for any cash transaction exceeding $10,000...
-#    2. Collecting customer information, including name, SSN/TIN, address...
-#    3. OFAC Screening for all new customers, wire transfer beneficiaries..."
-
-# Admin-only doc: John (user) cannot see compliance procedures (RLS blocks admin collection)
-curl -s http://localhost:8002 -H "Content-Type: application/json" -H "Authorization: Bearer ${JOHN_TOKEN}" -d '{"jsonrpc":"2.0","id":"2","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"What is the compliance procedure for suspicious transactions?"}],"messageId":"2"}}}' | python3 -m json.tool
-# Expected: no results — admin docs are invisible to user role
-# Example response:
-#   "No information was found related to the compliance procedure for suspicious transactions."
-
-# User doc: Jane (admin) sees password/security info
-curl -s http://localhost:8002 -H "Content-Type: application/json" -H "Authorization: Bearer ${JANE_TOKEN}" -d '{"jsonrpc":"2.0","id":"3","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"How do I change my password and what are the security requirements?"}],"messageId":"3"}}}' | python3 -m json.tool
-# Expected response (admin sees user collection docs):
-#   "To change your password, log in to banking.redbank.com or open the RedBank mobile app,
-#    go to Settings > Security > Change Password, and follow the prompts. Your new password
-#    must be at least 12 characters long, include at least one uppercase letter, one lowercase
-#    letter, one number, and one special character (!@#$%^&*), and cannot reuse any of your
-#    last 10 passwords. Your password expires every 90 days and you will be prompted to
-#    change it."
-
-# User doc: John (user) also sees password/security info (user collection is visible to all)
-curl -s http://localhost:8002 -H "Content-Type: application/json" -H "Authorization: Bearer ${JOHN_TOKEN}" -d '{"jsonrpc":"2.0","id":"4","method":"message/send","params":{"message":{"role":"user","parts":[{"kind":"text","text":"How do I change my password and what are the security requirements?"}],"messageId":"4"}}}' | python3 -m json.tool
-# Expected response (user sees the same password/security info):
-#   "To change your password, log in to banking.redbank.com or open the RedBank mobile app,
-#    go to Settings > Security > Change Password, and follow the prompts. Your new password
-#    must be at least 12 characters long, include at least one uppercase letter, one lowercase
-#    letter, one number, and one special character (!@#$%^&*), and cannot reuse any of your
-#    last 10 passwords. Your password expires every 90 days and you will be prompted to
-#    change it. It is recommended to use a password manager to generate and store strong,
-#    unique passwords."
-```
-
 ### Step 11 — Verify Kagenti enrollment
 
 ```bash
 oc get agentruntime
-# expect: redbank-banking-agent-runtime (agent, Active) and redbank-mcp-server-runtime (tool, Active)
+# expect: all four runtimes in Active phase
 
 oc get deployment redbank-mcp-server -o jsonpath='{.metadata.labels.kagenti\.io/type}'
 # expect: tool (set by operator)
@@ -713,7 +743,7 @@ Integration tests cover tool discovery, admin reads, user RLS scoping, write enf
 
 - MCP server deployed and running
 - Port-forward active: `oc port-forward svc/redbank-mcp-server 8000:8000`
-- Keycloak realm configured: `make setup-keycloak`
+- Keycloak realm configured (included in `make deploy`)
 
 ### Run
 
@@ -736,7 +766,9 @@ pytest tests/test_mcp_rls.py -v
 
 By default, tests fetch real access tokens from Keycloak. Set `USE_FAKE_JWT=true` for local dev without Keycloak.
 
-## Environment Variables
+## Per-Component Environment Variables
+
+These are the env vars each component reads at runtime (set automatically by the deploy scripts and Helm charts from the top-level `.env`).
 
 ### MCP Server
 
@@ -752,11 +784,11 @@ By default, tests fetch real access tokens from Keycloak. Set `USE_FAKE_JWT=true
 | `JWT_VERIFY` | `false` | `false` = trust AuthBridge sidecar; `true` = verify JWT via JWKS |
 | `JWT_ALGORITHMS` | `RS256` | Comma-separated JWT algorithms |
 | `JWKS_URL` | (empty) | Keycloak JWKS endpoint (required when `JWT_VERIFY=true`) |
-| `JWT_AUDIENCE` | (empty) | Expected JWT `aud` claim. Use `account` for default Keycloak tokens, or `redbank-mcp` after adding an audience mapper. Tokens are rejected if the claim doesn't match. |
+| `JWT_AUDIENCE` | (empty) | Expected JWT `aud` claim |
 | `ADMIN_ROLE_CLAIM` | `admin` | Role name that grants admin access |
 | `DEFAULT_ROLE` | `admin` | Fallback role when no Bearer token present |
 | `DEFAULT_EMAIL` | `jane@redbank.demo` | Fallback email when no Bearer token present |
-| `PGVECTOR_USER` | `app` | Database user for PGVector connections (non-superuser, RLS enforced) |
+| `PGVECTOR_USER` | `app` | Database user for PGVector connections |
 | `PGVECTOR_PASSWORD` | `app` | Password for PGVector database user |
 | `EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | HuggingFace embedding model for `search_knowledge` |
 
@@ -767,10 +799,10 @@ By default, tests fetch real access tokens from Keycloak. Set `USE_FAKE_JWT=true
 | `HOST` | `0.0.0.0` | Bind address |
 | `PORT` | `8001` | Bind port |
 | `MCP_SERVER_URL` | `http://redbank-mcp-server:8000/mcp` | MCP server endpoint (in-cluster service) |
-| `LLM_BASE_URL` | (required) | vLLM or OpenAI API base URL (e.g. `http://vllm:8000/v1`) |
-| `LLM_MODEL` | (required) | Model name (e.g. `meta-llama/Llama-3.1-8B-Instruct`) |
-| `OPENAI_API_KEY` | (required) | API key for the LLM endpoint (vLLM or OpenAI). Stored in `llm-credentials` secret. |
-| `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint from OpenShift AI |
+| `LLM_BASE_URL` | (required) | vLLM or OpenAI API base URL |
+| `LLM_MODEL` | (required) | Model name |
+| `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
+| `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-banking-agent:8001` | Agent's own URL (used in agent card) |
 
 ### Knowledge Agent
@@ -782,9 +814,33 @@ By default, tests fetch real access tokens from Keycloak. Set `USE_FAKE_JWT=true
 | `MCP_SERVER_URL` | `http://redbank-mcp-server:8000/mcp` | MCP server endpoint (in-cluster service) |
 | `LLM_BASE_URL` | (required) | vLLM or OpenAI API base URL |
 | `LLM_MODEL` | (required) | Model name |
-| `OPENAI_API_KEY` | (required) | API key for the LLM endpoint. Stored in `llm-credentials` secret. |
-| `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint from OpenShift AI |
+| `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
+| `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-knowledge-agent:8002` | Agent's own URL (used in agent card) |
+
+### Orchestrator Agent
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | Bind port |
+| `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
+| `LLM_BASE_URL` | (required) | LLM base URL (auto-appends `/v1` if missing) |
+| `LLM_MODEL` | (required) | Model name |
+| `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
+| `MLFLOW_EXPERIMENT_NAME` | `default-agent-experiment` | MLflow experiment name |
+| `AGENT_PUBLIC_URL` | `http://localhost:{PORT}` | Public URL for agent card |
+| `LOG_LEVEL` | `INFO` | Logging level |
+
+### Playground
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | Bind port |
+| `ORCHESTRATOR_URL` | `http://localhost:8000` | URL of the orchestrator backend |
+| `KEYCLOAK_URL` | (optional) | Keycloak base URL — enables OIDC auth when set with `KEYCLOAK_REALM` and `KEYCLOAK_CLIENT_ID` |
+| `KEYCLOAK_REALM` | (optional) | Keycloak realm name |
+| `KEYCLOAK_CLIENT_ID` | (optional) | Keycloak client ID |
+| `LOG_LEVEL` | `INFO` | Logging level |
 
 ### Production Configuration
 

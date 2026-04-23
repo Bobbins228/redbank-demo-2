@@ -6,17 +6,14 @@ while preserving conversation state via a shared checkpointer.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from os import getenv
-from typing import Callable
 
 from langchain.agents import create_agent
-from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 
-from redbank_orchestrator.discovery import PeerAgent, discover_peers
+from redbank_orchestrator.discovery import PeerAgent
 from redbank_orchestrator.tools import create_tools_from_peers
 
 logger = logging.getLogger(__name__)
@@ -79,24 +76,23 @@ def build_graph_from_peers(
 ):
     """Build a compiled LangGraph agent from a list of peers.
 
-    Unlike ``get_graph_closure``, this does NOT perform discovery — it
-    takes an already-discovered peer list.  This allows the caller
-    (server.py) to rebuild the graph when peers change without losing
-    the shared checkpointer.
+    Takes an already-discovered peer list so the caller (server.py)
+    can rebuild the graph when peers change without losing the shared
+    checkpointer.
 
     Returns:
         The compiled LangGraph agent.
     """
     if not api_key:
-        api_key = getenv("API_KEY")
+        api_key = getenv("OPENAI_API_KEY")
     if not base_url:
-        base_url = getenv("BASE_URL")
+        base_url = getenv("LLM_BASE_URL")
     if not model_id:
-        model_id = getenv("MODEL_ID")
+        model_id = getenv("LLM_MODEL")
 
     is_local = any(host in base_url for host in ["localhost", "127.0.0.1"])
     if not is_local and not api_key:
-        raise ValueError("API_KEY is required for non-local environments.")
+        raise ValueError("OPENAI_API_KEY is required for non-local environments.")
 
     tools = create_tools_from_peers(peers)
     system_prompt = _build_system_prompt(peers)
@@ -120,49 +116,3 @@ def build_graph_from_peers(
         system_prompt=system_prompt,
         checkpointer=_checkpointer,
     )
-
-
-def get_graph_closure(
-    model_id: str | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
-) -> Callable:
-    """Build and return a closure that creates the RedBank Orchestrator LangGraph agent.
-
-    Peer discovery is performed once during closure creation. The closure
-    can then be called repeatedly to get the compiled graph.
-
-    .. note::
-        For periodic re-discovery, use ``build_graph_from_peers`` directly
-        instead — it skips discovery and accepts a pre-built peer list.
-    """
-    if not api_key:
-        api_key = getenv("API_KEY")
-    if not base_url:
-        base_url = getenv("BASE_URL")
-    if not model_id:
-        model_id = getenv("MODEL_ID")
-
-    # Discover peers (runs async in sync context)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            peers = pool.submit(asyncio.run, discover_peers()).result()
-    else:
-        peers = asyncio.run(discover_peers())
-
-    def get_graph():
-        return build_graph_from_peers(
-            peers, model_id=model_id, base_url=base_url, api_key=api_key
-        )
-
-    # Expose peers on the closure so server.py can read them
-    get_graph.peers = peers  # type: ignore[attr-defined]
-
-    return get_graph
