@@ -66,9 +66,15 @@ spec:
         # PGVector knowledge base — connects as the non-superuser 'app' role
         # so that RLS policies on the embeddings table are enforced.
         - name: PGVECTOR_USER
-          value: "app"
+          valueFrom:
+            secretKeyRef:
+              name: pgvector-credentials
+              key: PGVECTOR_USER
         - name: PGVECTOR_PASSWORD
-          value: "app"
+          valueFrom:
+            secretKeyRef:
+              name: pgvector-credentials
+              key: PGVECTOR_PASSWORD
 ---
 apiVersion: v1
 kind: Service

@@ -43,7 +43,7 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
             {{- if .Values.secrets.apiKey }}
-            - name: API_KEY
+            - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "agent.fullname" . }}-secret

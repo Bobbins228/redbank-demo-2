@@ -67,10 +67,10 @@ _graph_initialized = False
 
 def _get_llm_config() -> dict[str, str | None]:
     """Read LLM env vars once."""
-    base_url = getenv("BASE_URL")
-    model_id = getenv("MODEL_ID")
+    base_url = getenv("LLM_BASE_URL")
+    model_id = getenv("LLM_MODEL")
     if not base_url or not model_id:
-        raise RuntimeError("BASE_URL and MODEL_ID must be set (see .env.example).")
+        raise RuntimeError("LLM_BASE_URL and LLM_MODEL must be set (see .env.example).")
     if not base_url.endswith("/v1"):
         base_url = base_url.rstrip("/") + "/v1"
     return {"base_url": base_url, "model_id": model_id}
@@ -346,7 +346,7 @@ async def _chat_completions(request: Request) -> JSONResponse | StreamingRespons
     if not user_text.strip():
         raise HTTPException(status_code=400, detail="No user message in messages")
 
-    model_id = body.get("model") or getenv("MODEL_ID", "model")
+    model_id = body.get("model") or getenv("LLM_MODEL", "model")
     auth_token = request.headers.get("Authorization")
 
     if stream:

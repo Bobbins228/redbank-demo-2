@@ -4,9 +4,9 @@ framework: langgraph
 description: "Multi-agent orchestrator that classifies user intent and routes queries to specialist agents (Knowledge, Banking Ops) via A2A protocol."
 env:
   required:
-    - API_KEY
-    - BASE_URL
-    - MODEL_ID
+    - OPENAI_API_KEY
+    - LLM_BASE_URL
+    - LLM_MODEL
   optional:
     - PORT
     - CONTAINER_IMAGE

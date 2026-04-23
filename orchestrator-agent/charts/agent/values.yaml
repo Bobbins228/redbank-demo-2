@@ -11,8 +11,8 @@ image:
 env: {}
   # Agents define their own env vars via per-agent values.yaml
   # Example:
-  #   MODEL_ID: "llama3.2:3b"
-  #   BASE_URL: "http://localhost:8321/v1"
+  #   LLM_MODEL: "llama3.2:3b"
+  #   LLM_BASE_URL: "http://localhost:8321/v1"
 
 extraLabels: {}
   # Additional labels applied to all resources (Deployment, Service, Route, Ingress).

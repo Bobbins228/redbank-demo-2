@@ -5,6 +5,18 @@ __pycache__/
 pytest-logs.txt
 .env
 !.env.example
+!template.env
 *.egg-info/
+dist/
 .DS_Store
 **/.DS_Store
+
+# Helm secrets (generated during deploy with API keys)
+.helm-secrets.yaml
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db

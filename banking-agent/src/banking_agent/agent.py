@@ -17,7 +17,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-WRITE_TOOLS = {"update_account", "create_transaction", "get_customer"}
+BANKING_TOOLS = {"update_account", "create_transaction", "get_customer"}
 
 SYSTEM_PROMPT = """You are the RedBank Banking Operations Agent.
 
@@ -120,7 +120,7 @@ async def create_agent_with_tools(bearer_token: str | None = None):
     )
 
     all_tools = await client.get_tools()
-    tools = [t for t in all_tools if t.name in WRITE_TOOLS]
+    tools = [t for t in all_tools if t.name in BANKING_TOOLS]
     tools = _patch_mcp_error_handling(tools)
     if not tools:
         logger.warning("No tools loaded from MCP server at %s", MCP_SERVER_URL)

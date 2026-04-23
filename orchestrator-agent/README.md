@@ -29,14 +29,15 @@ The orchestrator extracts the `Authorization` header from incoming requests and 
 
 ## Configuration
 
+All deployment configuration is managed via the top-level `.env` file. See the [project README](../README.md) for full setup instructions.
+
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `API_KEY` | Yes | LLM API key |
-| `BASE_URL` | Yes | LLM API endpoint (e.g. `https://litellm.example.com/v1`) |
-| `MODEL_ID` | Yes | LLM model identifier (e.g. `llama-scout-17b`) |
-| `CONTAINER_IMAGE` | Yes | Container image reference for build/deploy (auto-set by `make build-openshift`) |
-| `NAMESPACE` | No | Target K8s/OpenShift namespace (defaults to current context) |
-| `PORT` | No | Server port (default: `8000` locally, `8080` in container) |
+| `OPENAI_API_KEY` | Yes | LLM API key |
+| `LLM_BASE_URL` | Yes | LLM API endpoint (e.g. `https://vllm.example.com/v1`) |
+| `LLM_MODEL` | Yes | LLM model identifier (e.g. `llama-scout-17b`) |
+| `NAMESPACE` | No | Target K8s/OpenShift namespace (defaults to `redbank-demo`) |
+| `PORT` | No | Server port (default: `8080` in container) |
 
 In-cluster, peer agents are discovered automatically via kagenti `AgentCard` CRDs. Re-discovery runs every 15 seconds so new agents are picked up without restarting.
 
@@ -48,54 +49,17 @@ In-cluster, peer agents are discovered automatically via kagenti `AgentCard` CRD
 | `POST` | `/` | A2A JSON-RPC `message/send` (for inter-agent calls) |
 | `GET` | `/.well-known/agent-card.json` | A2A agent card for discovery |
 | `GET` | `/health` | Health check |
-| `GET` | `/` | Playground chat UI |
 
 ## Deployment (OpenShift)
 
-### Prerequisites
-
-- OpenShift cluster with `oc` CLI and Helm
-- Knowledge Agent (B) and Banking Agent (C) deployed and accessible in-cluster
-- LLM endpoint accessible from the cluster
-
-### 1. Configure
+Deployment is driven from the top-level Makefile:
 
 ```bash
-make init   # creates .env from .env.example
+# From the project root (redbank-demo-2/)
+make deploy-orchestrator
 ```
 
-Edit `.env` with your environment values:
-
-```bash
-API_KEY=<your-llm-api-key>
-BASE_URL=http://localhost:8321/v1
-MODEL_ID=ollama/llama3.1:8b
-NAMESPACE=redbank-demo
-```
-
-### 2. Build
-
-Build the container image in-cluster via OpenShift BuildConfig:
-
-```bash
-make build-openshift
-```
-
-This builds in the configured `NAMESPACE` and automatically sets `CONTAINER_IMAGE` in `.env`.
-
-Alternatively, build and push from a local machine:
-
-```bash
-make build && make push
-```
-
-### 3. Deploy
-
-```bash
-make deploy
-```
-
-This runs `helm upgrade --install` with the shared chart and applies the `protocol.kagenti.io/a2a` label for peer discovery.
+This builds the container image in-cluster via `oc new-build`, then deploys via `helm upgrade --install` with the shared chart and `protocol.kagenti.io/a2a` label for peer discovery.
 
 ### Verify
 
@@ -112,21 +76,17 @@ curl -s https://$(oc get route redbank-orchestrator -o jsonpath='{.spec.host}')/
   -d '{"messages":[{"role":"user","content":"What is my account balance?"}]}'
 ```
 
-### Other Targets
-
-```bash
-make dry-run     # Preview Helm manifests without deploying
-make undeploy    # Remove from cluster
-```
-
 ## Local Development
 
 ### Setup
 
 ```bash
-make init        # Create .env from template
-make env         # Create venv + install dependencies
-make run-app     # Start on port 8000 with hot-reload
+cd orchestrator-agent
+python3 -m venv .venv && source .venv/bin/activate
+uv sync --python 3.12
+cp .env.example .env   # edit with your LLM config
+source .venv/bin/activate && set -a && source .env && set +a
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Testing with Mock Agents
@@ -138,7 +98,7 @@ The `examples/mock_agents.py` script starts two mock A2A agents locally for end-
 uv run python examples/mock_agents.py
 
 # Terminal 2 — start the orchestrator
-make run-app
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 3 — test
 curl -s http://localhost:8000/chat/completions \
@@ -153,5 +113,5 @@ curl -s http://localhost:8000/chat/completions \
 ### Run Tests
 
 ```bash
-make test        # 15 unit tests
+uv run --extra dev python -m pytest tests/
 ```
