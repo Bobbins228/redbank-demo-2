@@ -19,6 +19,10 @@ oc delete agentruntime redbank-knowledge-agent-runtime --ignore-not-found
 oc delete agentruntime redbank-mcp-server-runtime --ignore-not-found
 oc delete agentruntime redbank-orchestrator-runtime --ignore-not-found
 
+_out "Deleting AgentCard CRs"
+oc delete agentcard redbank-banking-agent-card --ignore-not-found
+oc delete agentcard redbank-knowledge-agent-card --ignore-not-found
+
 _out "Deleting Knowledge Agent deployment and service"
 oc delete deployment redbank-knowledge-agent --ignore-not-found
 oc delete service redbank-knowledge-agent --ignore-not-found
@@ -43,6 +47,9 @@ oc delete service postgresql --ignore-not-found
 
 _out "Deleting PersistentVolumeClaim"
 oc delete pvc postgres-pvc --ignore-not-found
+
+_out "Deleting unsigned card ConfigMaps"
+oc delete configmap redbank-banking-agent-card-unsigned redbank-knowledge-agent-card-unsigned --ignore-not-found
 
 _out "Deleting secrets and configmaps"
 oc delete secret postgresql-credentials --ignore-not-found

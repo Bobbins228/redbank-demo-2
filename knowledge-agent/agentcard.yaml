@@ -1,0 +1,12 @@
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentCard
+metadata:
+  name: redbank-knowledge-agent-card
+spec:
+  syncPeriod: "30s"
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: redbank-knowledge-agent
+  identityBinding:
+    strict: true

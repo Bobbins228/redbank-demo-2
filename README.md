@@ -2,7 +2,7 @@
 
 PostgreSQL database, MCP server, and A2A agents for the RedBank multi-agent banking demo, adapted for Kagenti deployment with Row-Level Security (RLS).
 
-Part of RHAISTRAT-1459 / RHAIENG-4555 (Epic) / RHAIENG-4556 (MCP Server) / RHAIENG-4558 (Knowledge Agent) / RHAIENG-4559 (Banking Agent).
+Part of RHAISTRAT-1459 / RHAIENG-4555 (Epic) / RHAIENG-4556 (MCP Server) / RHAIENG-4558 (Knowledge Agent) / RHAIENG-4559 (Banking Agent) / RHAIENG-4641 (SPIRE Signature Verification).
 
 ## Directory Layout
 
@@ -32,23 +32,25 @@ redbank-demo-2/
 │   └── deploy.sh                 OpenShift build + deploy
 ├── banking-agent/                A2A Banking Operations Agent (Agent C — admin CRUD)
 │   ├── src/banking_agent/
-│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── __main__.py           A2A server startup, signed card loading, MLflow init
 │   │   ├── agent.py              LangGraph ReAct agent + MCP client setup
 │   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── banking-agent.yaml        Deployment + Service
+│   ├── banking-agent.yaml        ConfigMap (unsigned card) + Deployment + Service
+│   ├── agentcard.yaml            AgentCard CR (strict identity binding)
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── knowledge-agent/              A2A Knowledge Agent (Agent B — read-only RAG + data)
 │   ├── src/knowledge_agent/
-│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── __main__.py           A2A server startup, signed card loading, MLflow init
 │   │   ├── agent.py              LangGraph ReAct agent + allow-list filter
 │   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
 │   ├── tests/                    Unit tests (mocked, no infra needed)
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── knowledge-agent.yaml      Deployment + Service
+│   ├── knowledge-agent.yaml      ConfigMap (unsigned card) + Deployment + Service
+│   ├── agentcard.yaml            AgentCard CR (strict identity binding)
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── orchestrator-agent/           A2A Orchestrator Agent (Agent A — intent routing)
@@ -73,10 +75,13 @@ redbank-demo-2/
 │   ├── pyproject.toml
 │   ├── Dockerfile
 │   └── deploy.sh                 OpenShift build + Helm deploy
+├── spire/                        SPIRE identity resources
+│   └── clusterspiffeid.yaml      ClusterSPIFFEID template for agent pods
 ├── scripts/
 │   ├── setup-keycloak.sh         Provision Keycloak realm, client, users, audience mapper
 │   ├── test-knowledge-agent.sh   Manual A2A agent test with Keycloak JWTs
 │   ├── test-search-knowledge.sh  Manual MCP tool test with Keycloak JWTs
+│   ├── verify-signatures.sh     Verify SPIRE agent card signing and identity binding
 │   └── cleanup.sh                Tear down deployed workloads + Keycloak realm
 ├── tests/
 │   └── test_mcp_rls.py           MCP-level integration tests (pytest)
@@ -209,14 +214,44 @@ Seed data includes 5 customers (Alice, Bob, Carol, David, John), 13 statements, 
 
 Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom resource (`agent.kagenti.dev/v1alpha1`). The `AgentRuntime` references the Deployment via `targetRef` — the operator then manages `kagenti.io/type` labels, sets a `kagenti.io/config-hash` annotation for rollout coordination, and enables AuthBridge sidecar injection at Pod admission.
 
-| Workload | AgentRuntime | `spec.type` | Protocol label |
-|----------|-------------|-------------|----------------|
-| `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | `protocol.kagenti.io/mcp: "true"` (Service) |
-| `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
-| `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
-| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment) |
+| Workload | AgentRuntime | `spec.type` | AgentCard | Protocol label |
+|----------|-------------|-------------|-----------|----------------|
+| `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | — | `protocol.kagenti.io/mcp: "true"` (Service) |
+| `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | `redbank-banking-agent-card` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
+| `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | `redbank-knowledge-agent-card` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
+| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | — | `protocol.kagenti.io/a2a: ""` (Deployment) |
 
 The `kagenti.io/type` label on Deployments is managed by the operator — do not set it manually. Protocol labels on Services (`protocol.kagenti.io/a2a`, `protocol.kagenti.io/mcp`) remain in the Service manifests since they drive AgentCard sync and tool discovery independently.
+
+### SPIRE AgentCard Signature Verification (RHAIENG-4641)
+
+Both A2A agents use SPIRE-based cryptographic identity to sign their AgentCards. This ensures that each agent's identity is cryptographically bound to its SPIFFE ID, preventing card spoofing.
+
+**How it works:**
+
+1. A `ClusterSPIFFEID` (`spire/clusterspiffeid.yaml`) registers a SPIFFE ID template for pods labeled `kagenti.io/type: agent`
+2. The kagenti operator's **mutating webhook** injects SPIRE infrastructure (CSI volume, spiffe-helper sidecar, envoy-proxy, proxy-init) into agent pods automatically
+3. A `sign-agentcard` init container fetches a SPIRE SVID and signs the unsigned agent card (from a ConfigMap) with a JWS ES256 signature
+4. The signed card is mounted into the main container, which loads it at startup via `_load_agent_card()` (falling back to in-memory construction for local dev)
+5. The operator's AgentCard controller fetches the served card, verifies the JWS signature against the SPIRE trust bundle, and confirms the SPIFFE ID matches the expected identity
+
+**AgentCard CRs** (`agentcard.yaml`) are created with `identityBinding.strict: true`, which requires the operator to verify both the cryptographic signature and the SPIFFE identity binding before marking the agent as trusted.
+
+**Verification status:**
+
+| Field | Description |
+|-------|-------------|
+| `SignatureVerified` | JWS signature is valid (ES256, verified against SPIRE trust bundle) |
+| `Bound` | SPIFFE ID from x5c certificate matches the expected trust domain |
+| `signatureIdentityMatch` | Both signature and identity binding pass |
+| `agent.kagenti.dev/signature-verified` | Label propagated to pod template when verified |
+
+**SPIFFE IDs follow the pattern:**
+```
+spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>
+```
+
+For example: `spiffe://apps.rosa.redbank-demo2.ij5f.p3.openshiftapps.com/ns/redbank-dev/sa/redbank-banking-agent`
 
 Verify enrollment:
 
@@ -229,10 +264,10 @@ oc get agentruntimes
 # redbank-orchestrator-runtime        agent   redbank-orchestrator      Active  ...
 
 oc get agentcards
-# NAME                                      PROTOCOL   KIND         TARGET                    AGENT                     SYNCED
-# redbank-banking-agent-deployment-card      a2a        Deployment   redbank-banking-agent     RedBank Banking...        True
-# redbank-knowledge-agent-deployment-card    a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...      True
-# redbank-orchestrator-deployment-card       a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...   True
+# NAME                                  PROTOCOL   KIND         TARGET                    AGENT                        VERIFIED   BOUND   SYNCED
+# redbank-banking-agent-card            a2a        Deployment   redbank-banking-agent     RedBank Banking...           true       true    True
+# redbank-knowledge-agent-card          a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...         true       true    True
+# redbank-orchestrator-deployment-card  a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...                         True
 ```
 
 ### Banking Operations Agent (Agent C)
@@ -254,6 +289,7 @@ The Banking Operations Agent is an A2A service built with LangGraph that provide
 
 **Kagenti enrollment:**
 - **AgentRuntime**: `redbank-banking-agent-runtime` (type: `agent`) — operator manages `kagenti.io/type` label and AuthBridge injection
+- **AgentCard**: `redbank-banking-agent-card` — strict identity binding, SPIRE signature verification
 - **Service**: `protocol.kagenti.io/a2a: ""` — enables AgentCard sync and A2A discovery
 
 **Token flow:**
@@ -286,6 +322,7 @@ The Knowledge Agent is a read-only A2A service built with LangGraph that provide
 
 **Kagenti enrollment:**
 - **AgentRuntime**: `redbank-knowledge-agent-runtime` (type: `agent`)
+- **AgentCard**: `redbank-knowledge-agent-card` — strict identity binding, SPIRE signature verification
 - **Deployment + Service**: `protocol.kagenti.io/a2a: ""` label for AgentCard discovery
 
 ### Orchestrator Agent (Agent A)
@@ -422,6 +459,7 @@ All deployment is driven through a single top-level `Makefile` and `.env` file. 
 - OpenShift cluster with `oc` CLI authenticated
 - Keycloak deployed (the setup script provisions a realm and demo users)
 - `helm` CLI installed (for orchestrator and playground)
+- SPIRE deployed with CSI driver (for agent card signing)
 - An OpenAI-compatible LLM endpoint (e.g. vLLM)
 
 ### Quick Start
@@ -433,7 +471,7 @@ make init
 # 2. Edit .env with your configuration (see below)
 vi .env
 
-# 3. Deploy everything (Keycloak setup + DB + MCP + agents + playground)
+# 3. Deploy everything (Keycloak setup + SPIRE + DB + MCP + agents + playground)
 make deploy
 
 # 4. Grant schema CREATE to 'app' role (required for PGVector metadata tables)
@@ -443,10 +481,11 @@ oc exec deployment/postgresql -- psql -U user -d db -c "GRANT CREATE ON SCHEMA p
 make compile-pipeline
 # Upload and run pgvector_rag_pipeline.yaml in OpenShift AI
 
-# 6. Verify
+# 7. Verify
 oc get pods
 oc get agentruntimes
-oc get agentcards
+oc get agentcards   # expect VERIFIED=true, BOUND=true for both agents
+make verify-signatures
 ```
 
 ### Environment Variables (.env)
@@ -507,14 +546,15 @@ make clean
 ```
 
 This removes:
-- All AgentRuntime CRs
+- All AgentRuntime and AgentCard CRs
 - Agent deployments and services
 - Helm releases (orchestrator + playground)
+- Unsigned card ConfigMaps
 - PostgreSQL deployment, service, and PVC
 - Secrets and configmaps
 - Keycloak `redbank` realm (including users, client, roles)
 
-The namespace and OpenShift build configs are retained.
+The namespace, ClusterSPIFFEID, and OpenShift build configs are retained.
 
 > **Note:** Tier 1 access gating (non-admin rejection at the network level) requires the Kagenti AuthBridge sidecar, which is injected by the Kagenti operator. Without it, the MCP server's `@admin_only` decorator still enforces write restrictions at the tool level (Tier 2), and RLS enforces read scoping at the database level.
 
@@ -804,6 +844,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-banking-agent:8001` | Agent's own URL (used in agent card) |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 
 ### Knowledge Agent
 
@@ -817,6 +858,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-knowledge-agent:8002` | Agent's own URL (used in agent card) |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 
 ### Orchestrator Agent
 

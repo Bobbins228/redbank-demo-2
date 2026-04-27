@@ -31,6 +31,10 @@ function setup() {
 
   oc new-project "${ns}" 2>/dev/null || oc project "${ns}"
 
+  _out "Labeling namespace for kagenti webhook and SPIRE agent card signing"
+  oc label namespace "${ns}" kagenti-enabled=true --overwrite
+  oc label namespace "${ns}" agentcard=true --overwrite
+
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
     _out "Creating/updating llm-credentials secret"
     oc create secret generic llm-credentials \
@@ -55,6 +59,9 @@ function setup() {
 
   _out Applying AgentRuntime CR
   oc apply -f ./agentruntime.yaml
+
+  _out Applying AgentCard CR
+  oc apply -f ./agentcard.yaml
 
   _out Done deploying redbank-banking-agent
 }
