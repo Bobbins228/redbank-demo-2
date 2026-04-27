@@ -20,8 +20,7 @@ oc delete agentruntime redbank-mcp-server-runtime --ignore-not-found
 oc delete agentruntime redbank-orchestrator-runtime --ignore-not-found
 
 _out "Deleting AgentCard CRs"
-oc delete agentcard redbank-banking-agent-card --ignore-not-found
-oc delete agentcard redbank-knowledge-agent-card --ignore-not-found
+oc delete agentcard --all --ignore-not-found
 
 _out "Deleting Knowledge Agent deployment and service"
 oc delete deployment redbank-knowledge-agent --ignore-not-found

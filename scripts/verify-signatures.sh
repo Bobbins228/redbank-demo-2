@@ -22,7 +22,7 @@ AGENTS=(
 
 for ENTRY in "${AGENTS[@]}"; do
   IFS=: read -r AGENT_NAME CONTAINER_NAME PORT <<< "$ENTRY"
-  CARD_NAME="${AGENT_NAME}-card"
+  CARD_NAME="${AGENT_NAME}-deployment-card"
 
   echo ""
   echo "========================================"

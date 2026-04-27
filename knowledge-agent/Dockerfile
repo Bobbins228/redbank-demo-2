@@ -11,4 +11,4 @@ RUN uv pip install --python /opt/app-root/bin/python3 --no-cache .
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8002
-CMD ["python3", "-m", "src"]
+CMD ["python3", "-m", "knowledge_agent"]

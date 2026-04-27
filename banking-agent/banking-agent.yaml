@@ -69,7 +69,6 @@ kind: Deployment
 metadata:
   name: redbank-banking-agent
   labels:
-    kagenti.io/type: agent
     protocol.kagenti.io/a2a: ""
     app.kubernetes.io/name: redbank-banking-agent
 spec:
@@ -77,7 +76,6 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: redbank-banking-agent
-      kagenti.io/type: agent
   template:
     metadata:
       labels:

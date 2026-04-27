@@ -59,9 +59,6 @@ function setup() {
   _out Applying AgentRuntime CR
   oc apply -f ./agentruntime.yaml
 
-  _out Applying AgentCard CR
-  oc apply -f ./agentcard.yaml
-
   _out Done deploying redbank-banking-agent
 }
 
