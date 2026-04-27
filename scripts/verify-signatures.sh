@@ -51,7 +51,7 @@ for ENTRY in "${AGENTS[@]}"; do
     -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' \
     2>/dev/null | while read -r name; do echo "    - $name"; done
   CONTAINER_COUNT=$(oc get pod "$POD" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n' | wc -l | tr -d ' ')
+    -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null | grep -c . || echo 0)
   if [[ "$CONTAINER_COUNT" -gt 1 ]]; then
     echo "  WARNING: unexpected extra containers detected (expected 1, found ${CONTAINER_COUNT})"
   else
