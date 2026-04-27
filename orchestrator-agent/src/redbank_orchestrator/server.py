@@ -16,6 +16,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from os import getenv
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -469,11 +470,29 @@ async def _lifespan(app: Starlette):
         pass
 
 
+_AGENT_CARD_PATH = getenv(
+    "AGENT_CARD_PATH",
+    "/opt/app-root/.well-known/agent-card.json",
+)
+
+
+def _load_agent_card() -> AgentCard:
+    card_file = Path(_AGENT_CARD_PATH)
+    if card_file.is_file():
+        logger.info("Loading signed agent card from %s", card_file)
+        return AgentCard.model_validate(json.loads(card_file.read_text()))
+    logger.warning(
+        "Signed agent card not found at %s — building in memory",
+        card_file,
+    )
+    return _build_agent_card()
+
+
 def build_app() -> Starlette:
     """Build the Starlette ASGI app with A2A + standard routes."""
     enable_tracing()
 
-    agent_card = _build_agent_card()
+    agent_card = _load_agent_card()
     handler = DefaultRequestHandler(
         agent_executor=OrchestratorA2AExecutor(),
         task_store=InMemoryTaskStore(),

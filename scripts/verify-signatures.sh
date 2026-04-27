@@ -18,6 +18,7 @@ echo ""
 AGENTS=(
   "redbank-banking-agent:banking-agent:8001"
   "redbank-knowledge-agent:knowledge-agent:8002"
+  "redbank-orchestrator:redbank-orchestrator:8080"
 )
 
 for ENTRY in "${AGENTS[@]}"; do
