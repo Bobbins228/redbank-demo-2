@@ -1,4 +1,30 @@
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redbank-banking-agent-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: redbank-banking-agent-signer
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: redbank-banking-agent-signer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: redbank-banking-agent-signer
+subjects:
+  - kind: ServiceAccount
+    name: redbank-banking-agent-sa
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: redbank-banking-agent-card-unsigned
@@ -43,20 +69,24 @@ kind: Deployment
 metadata:
   name: redbank-banking-agent
   labels:
-    app.kubernetes.io/name: redbank-banking-agent
+    kagenti.io/type: agent
     protocol.kagenti.io/a2a: ""
+    app.kubernetes.io/name: redbank-banking-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: redbank-banking-agent
+      app.kubernetes.io/name: redbank-banking-agent
+      kagenti.io/type: agent
   template:
     metadata:
       labels:
-        app: redbank-banking-agent
+        app.kubernetes.io/name: redbank-banking-agent
         kagenti.io/type: agent
         protocol.kagenti.io/a2a: ""
+        istio.io/dataplane-mode: none
     spec:
+      serviceAccountName: redbank-banking-agent-sa
       initContainers:
       - name: sign-agentcard
         image: ghcr.io/kagenti/kagenti-operator/agentcard-signer:latest
@@ -90,7 +120,8 @@ spec:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
-            drop: ["ALL"]
+            drop:
+              - ALL
         resources:
           requests:
             cpu: 10m
@@ -156,7 +187,7 @@ metadata:
     app.kubernetes.io/name: redbank-banking-agent
 spec:
   selector:
-    app: redbank-banking-agent
+    app.kubernetes.io/name: redbank-banking-agent
   ports:
   - name: http
     port: 8001

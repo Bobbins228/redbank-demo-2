@@ -29,7 +29,7 @@ for ENTRY in "${AGENTS[@]}"; do
   echo " ${AGENT_NAME}"
   echo "========================================"
 
-  POD=$(oc get pods -n "$NAMESPACE" -l "app=${AGENT_NAME}" \
+  POD=$(oc get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=${AGENT_NAME}" \
     --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
   if [[ -z "$POD" ]]; then

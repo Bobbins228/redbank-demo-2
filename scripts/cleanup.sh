@@ -51,6 +51,11 @@ oc delete pvc postgres-pvc --ignore-not-found
 _out "Deleting unsigned card ConfigMaps"
 oc delete configmap redbank-banking-agent-card-unsigned redbank-knowledge-agent-card-unsigned --ignore-not-found
 
+_out "Deleting agent ServiceAccounts and RBAC"
+oc delete rolebinding redbank-banking-agent-signer redbank-knowledge-agent-signer --ignore-not-found
+oc delete role redbank-banking-agent-signer redbank-knowledge-agent-signer --ignore-not-found
+oc delete serviceaccount redbank-banking-agent-sa redbank-knowledge-agent-sa --ignore-not-found
+
 _out "Deleting secrets and configmaps"
 oc delete secret postgresql-credentials --ignore-not-found
 oc delete secret pgvector-credentials --ignore-not-found
