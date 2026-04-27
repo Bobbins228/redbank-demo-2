@@ -7,6 +7,19 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-redbank-demo}"
 
+echo "=== Pre-flight: Webhook Status ==="
+WEBHOOK_LABEL=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.kagenti-enabled}' 2>/dev/null || true)
+if [[ "$WEBHOOK_LABEL" == "true" ]]; then
+  echo "  WARNING: namespace '${NAMESPACE}' is labeled kagenti-enabled=true"
+  echo "  This triggers the mutating webhook and AuthBridge sidecar injection."
+  echo "  Remove it with: oc label namespace ${NAMESPACE} kagenti-enabled-"
+else
+  echo "  OK: namespace '${NAMESPACE}' is NOT labeled kagenti-enabled=true (no webhook injection)"
+fi
+AGENTCARD_LABEL=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.agentcard}' 2>/dev/null || true)
+echo "  agentcard label: ${AGENTCARD_LABEL:-<not set>}"
+echo ""
+
 AGENTS=(
   "redbank-banking-agent:banking-agent:8001"
   "redbank-knowledge-agent:knowledge-agent:8002"
@@ -33,10 +46,22 @@ for ENTRY in "${AGENTS[@]}"; do
   oc logs -n "$NAMESPACE" "$POD" -c sign-agentcard 2>/dev/null || echo "  (no init-container logs)"
   echo ""
 
-  echo "=== 2. Webhook-Injected Containers ==="
+  echo "=== 2. Pod Containers (expect: sign-agentcard init + main only, no sidecars) ==="
+  echo "  Init containers:"
   oc get pod "$POD" -n "$NAMESPACE" \
-    -o jsonpath='{range .spec.initContainers[*]}{.name}{"\n"}{end}{range .spec.containers[*]}{.name}{"\n"}{end}' \
-    2>/dev/null | while read -r name; do echo "  - $name"; done
+    -o jsonpath='{range .spec.initContainers[*]}{.name}{"\n"}{end}' \
+    2>/dev/null | while read -r name; do echo "    - $name"; done
+  echo "  Containers:"
+  oc get pod "$POD" -n "$NAMESPACE" \
+    -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' \
+    2>/dev/null | while read -r name; do echo "    - $name"; done
+  SIDECAR_COUNT=$(oc get pod "$POD" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n' | grep -cE 'envoy-proxy|spiffe-helper|proxy-init' || true)
+  if [[ "$SIDECAR_COUNT" -gt 0 ]]; then
+    echo "  WARNING: AuthBridge sidecars detected — webhook may be injecting into this namespace"
+  else
+    echo "  OK: no AuthBridge sidecars present"
+  fi
   echo ""
 
   echo "=== 3. Signed Card Verification ==="

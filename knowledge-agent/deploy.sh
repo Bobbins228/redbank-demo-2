@@ -31,8 +31,7 @@ function setup() {
 
   oc new-project "${ns}" 2>/dev/null || oc project "${ns}"
 
-  _out "Labeling namespace for kagenti webhook and SPIRE agent card signing"
-  oc label namespace "${ns}" kagenti-enabled=true --overwrite
+  _out "Labeling namespace for SPIRE agent card signing"
   oc label namespace "${ns}" agentcard=true --overwrite
 
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
