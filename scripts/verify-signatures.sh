@@ -7,17 +7,12 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-redbank-demo}"
 
-echo "=== Pre-flight: Webhook Status ==="
-WEBHOOK_LABEL=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.kagenti-enabled}' 2>/dev/null || true)
-if [[ "$WEBHOOK_LABEL" == "true" ]]; then
-  echo "  WARNING: namespace '${NAMESPACE}' is labeled kagenti-enabled=true"
-  echo "  This triggers the mutating webhook and AuthBridge sidecar injection."
-  echo "  Remove it with: oc label namespace ${NAMESPACE} kagenti-enabled-"
-else
-  echo "  OK: namespace '${NAMESPACE}' is NOT labeled kagenti-enabled=true (no webhook injection)"
-fi
+echo "=== Pre-flight: Namespace Labels ==="
 AGENTCARD_LABEL=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.agentcard}' 2>/dev/null || true)
 echo "  agentcard label: ${AGENTCARD_LABEL:-<not set>}"
+if [[ "$AGENTCARD_LABEL" != "true" ]]; then
+  echo "  WARNING: namespace '${NAMESPACE}' is not labeled agentcard=true — SPIRE identity registration may not work"
+fi
 echo ""
 
 AGENTS=(
@@ -55,12 +50,12 @@ for ENTRY in "${AGENTS[@]}"; do
   oc get pod "$POD" -n "$NAMESPACE" \
     -o jsonpath='{range .spec.containers[*]}{.name}{"\n"}{end}' \
     2>/dev/null | while read -r name; do echo "    - $name"; done
-  SIDECAR_COUNT=$(oc get pod "$POD" -n "$NAMESPACE" \
-    -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n' | grep -cE 'envoy-proxy|spiffe-helper|proxy-init' || true)
-  if [[ "$SIDECAR_COUNT" -gt 0 ]]; then
-    echo "  WARNING: AuthBridge sidecars detected — webhook may be injecting into this namespace"
+  CONTAINER_COUNT=$(oc get pod "$POD" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.containers[*].name}' 2>/dev/null | tr ' ' '\n' | wc -l | tr -d ' ')
+  if [[ "$CONTAINER_COUNT" -gt 1 ]]; then
+    echo "  WARNING: unexpected extra containers detected (expected 1, found ${CONTAINER_COUNT})"
   else
-    echo "  OK: no AuthBridge sidecars present"
+    echo "  OK: single container (no sidecars)"
   fi
   echo ""
 

@@ -130,11 +130,7 @@ Agent (A2A/MCP client)
 
 ### JWT Authentication
 
-No AuthBridge sidecar is deployed in this configuration — the MCP server verifies Keycloak JWTs directly. The server supports two modes:
-
-**Standalone mode** (`JWT_VERIFY=true`) — The server fetches signing keys from `JWKS_URL` (Keycloak JWKS endpoint) and verifies the JWT signature, expiration, and issuer itself. This is the mode used in this deployment.
-
-**AuthBridge trusted mode** (`JWT_VERIFY=false`) — For deployments with the optional AuthBridge sidecar (Envoy + go-processor), the sidecar validates the JWT and performs RFC 8693 token exchange upstream. The server decodes the trusted token without signature verification. Enable by labeling the namespace `kagenti-enabled=true` (not used here).
+The MCP server verifies Keycloak JWTs directly via JWKS (`JWT_VERIFY=true`). It fetches signing keys from the `JWKS_URL` (Keycloak JWKS endpoint) and verifies the JWT signature, expiration, and issuer.
 
 Identity is extracted from Keycloak JWT claims:
 - **email**: `claims.email` → `claims.preferred_username` → `claims.sub` (fallback chain)
@@ -195,7 +191,7 @@ Seed data includes 5 customers (Alice, Bob, Carol, David, John), 13 statements, 
 
 ### Kagenti Integration
 
-Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom resource (`agent.kagenti.dev/v1alpha1`). The `AgentRuntime` references the Deployment via `targetRef` — the operator then manages `kagenti.io/type` labels and sets a `kagenti.io/config-hash` annotation for rollout coordination. AuthBridge sidecar injection is not used in this deployment (the namespace is not labeled `kagenti-enabled=true`); SPIRE identity is configured directly via CSI volumes in the deployment YAMLs.
+Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom resource (`agent.kagenti.dev/v1alpha1`). The `AgentRuntime` references the Deployment via `targetRef` — the operator then manages `kagenti.io/type` labels and sets a `kagenti.io/config-hash` annotation for rollout coordination. SPIRE identity is configured directly via CSI volumes in the deployment YAMLs.
 
 | Workload | AgentRuntime | `spec.type` | AgentCard | Protocol label |
 |----------|-------------|-------------|-----------|----------------|
@@ -213,12 +209,12 @@ Both A2A agents use SPIRE-based cryptographic identity to sign their AgentCards.
 **How it works:**
 
 1. A `ClusterSPIFFEID` (`spire/clusterspiffeid.yaml`) registers a SPIFFE ID template for pods labeled `kagenti.io/type: agent` in namespaces labeled `agentcard: "true"`
-2. Each agent deployment YAML defines the SPIRE CSI volume (`csi.spiffe.io`) explicitly, along with an unsigned-card ConfigMap and a signed-card emptyDir volume — no mutating webhook or AuthBridge sidecars are involved
+2. Each agent deployment YAML defines the SPIRE CSI volume (`csi.spiffe.io`) explicitly, along with an unsigned-card ConfigMap and a signed-card emptyDir volume
 3. A `sign-agentcard` init container mounts the SPIRE agent socket via the CSI driver, fetches a SPIRE SVID, and signs the unsigned agent card (from the ConfigMap) with a JWS ES256 signature
 4. The signed card is written to the emptyDir volume and mounted read-only into the main container, which loads it at startup via `_load_agent_card()` (falling back to in-memory construction for local dev)
 5. The operator's AgentCard controller fetches the served card via HTTP, verifies the JWS signature against the SPIRE trust bundle, and confirms the SPIFFE ID matches the expected identity
 
-**Why not the mutating webhook:** The kagenti-operator provides an optional mutating webhook that injects AuthBridge sidecars (envoy-proxy, spiffe-helper, proxy-init) when a namespace is labeled `kagenti-enabled=true`. This adds Keycloak JWT authentication enforcement on all inbound traffic, but also blocks internal service-to-service calls and health probes with 401 Unauthorized unless bypass paths are configured. It requires the `kagenti-authbridge` SCC (root access for proxy-init, UID 1337 for envoy) and depends on four pre-deployed ConfigMaps. Instead, we label the namespace with only `agentcard=true` (for SPIRE identity registration) and define the CSI volume directly in the deployment YAMLs. This gives us cryptographic identity verification with the standard `restricted` SCC and no webhook dependency for pod creation.
+**Direct SPIRE integration:** We label the namespace with `agentcard=true` (for SPIRE identity registration) and define the CSI volume directly in the deployment YAMLs. This gives us cryptographic identity verification with the standard `restricted` SCC and no webhook dependency for pod creation.
 
 **AgentCard CRs** (`agentcard.yaml`) are created with `identityBinding.strict: true`, which requires the operator to verify both the cryptographic signature and the SPIFFE identity binding before marking the agent as trusted.
 
@@ -351,7 +347,7 @@ The Banking Agent (Agent C) and Knowledge Agent (Agent B) are designed to be cal
 - **Discovery**: The orchestrator discovers peers via `protocol.kagenti.io/a2a` service labels
 - **A2A protocol**: Agents accept `message/send` JSON-RPC requests at their service URL
 - **Token propagation**: The orchestrator forwards the user's Bearer JWT in the `Authorization` header. Agents pass it through to the MCP server, preserving the full identity chain.
-- **Access gating**: The MCP server's `@admin_only` decorator enforces write restrictions at the tool level, and RLS enforces read scoping at the database level. No AuthBridge sidecar is deployed in this configuration.
+- **Access gating**: The MCP server's `@admin_only` decorator enforces write restrictions at the tool level, and RLS enforces read scoping at the database level.
 
 ## RAG Pipeline (LangChain + PGVector)
 
@@ -444,16 +440,8 @@ All deployment is driven through a single top-level `Makefile` and `.env` file. 
 - Keycloak deployed (the setup script provisions a realm and demo users)
 - `helm` CLI installed (for orchestrator and playground)
 - SPIRE deployed with CSI driver (for agent card signing): `oc get csidrivers | grep csi.spiffe.io`
-- kagenti-operator installed with signature verification enabled (the operator webhook may exist but is not triggered — this deployment does not label the namespace `kagenti-enabled=true`)
+- kagenti-operator installed with signature verification enabled
 - An OpenAI-compatible LLM endpoint (e.g. vLLM)
-
-**Verify the namespace is NOT labeled for webhook injection:**
-
-```bash
-oc get namespace ${NAMESPACE:-redbank-demo} -o jsonpath='{.metadata.labels.kagenti-enabled}' ; echo
-# Expected: empty (no output) — if it shows "true", remove it:
-# oc label namespace ${NAMESPACE:-redbank-demo} kagenti-enabled-
-```
 
 ### Quick Start
 
@@ -549,7 +537,7 @@ This removes:
 
 The namespace, ClusterSPIFFEID, and OpenShift build configs are retained.
 
-> **Note:** This deployment does not use the Kagenti AuthBridge sidecar (the namespace is not labeled `kagenti-enabled=true`). Access control is enforced at the MCP tool level (`@admin_only` decorator) and the database level (RLS). To add network-level JWT enforcement, label the namespace `kagenti-enabled=true` to trigger AuthBridge sidecar injection by the operator.
+> **Note:** Access control is enforced at the MCP tool level (`@admin_only` decorator) and the database level (RLS). JWT authentication is handled directly by the MCP server via JWKS verification.
 
 ## Manual Testing
 
@@ -814,7 +802,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `POSTGRES_USER` | `user` | Database user |
 | `POSTGRES_PASSWORD` | `pass` | Database password |
 | `POSTGRES_PORT` | `5432` | Database port |
-| `JWT_VERIFY` | `false` | `false` = trust AuthBridge sidecar; `true` = verify JWT via JWKS |
+| `JWT_VERIFY` | `true` | `true` = verify JWT signature via JWKS; `false` = decode without verification (trusted upstream) |
 | `JWT_ALGORITHMS` | `RS256` | Comma-separated JWT algorithms |
 | `JWKS_URL` | (empty) | Keycloak JWKS endpoint (required when `JWT_VERIFY=true`) |
 | `JWT_AUDIENCE` | (empty) | Expected JWT `aud` claim |
@@ -879,7 +867,7 @@ These are the env vars each component reads at runtime (set automatically by the
 
 ### Production Configuration
 
-**This deployment** (direct SPIRE, no AuthBridge) — the MCP server verifies JWT signatures directly via JWKS:
+The MCP server verifies JWT signatures directly via JWKS:
 
 ```yaml
 - name: JWT_VERIFY
@@ -888,17 +876,6 @@ These are the env vars each component reads at runtime (set automatically by the
   value: "https://keycloak.example.com/realms/redbank/protocol/openid-connect/certs"
 - name: JWT_AUDIENCE
   value: "account"        # or "redbank-mcp" if audience mapper is configured
-- name: DEFAULT_ROLE
-  value: "user"           # fail-safe: no token = restricted access
-```
-
-**With AuthBridge sidecar** (optional — label namespace `kagenti-enabled=true`) — the sidecar validates and exchanges tokens upstream. The MCP server decodes the trusted token without re-verifying the signature:
-
-```yaml
-- name: JWT_VERIFY
-  value: "false"
-- name: JWT_AUDIENCE
-  value: "redbank-mcp"   # AuthBridge token exchange sets this audience
 - name: DEFAULT_ROLE
   value: "user"           # fail-safe: no token = restricted access
 ```

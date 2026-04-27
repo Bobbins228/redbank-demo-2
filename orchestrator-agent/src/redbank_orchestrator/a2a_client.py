@@ -66,7 +66,7 @@ async def send_a2a_text_message(
     Args:
         base_url: Base URL of the downstream A2A agent.
         text: The user's message text to forward.
-        auth_token: Optional Bearer token for AuthBridge identity propagation.
+        auth_token: Optional Bearer token for identity propagation.
         context_id: Optional A2A context ID to propagate to the downstream
             agent.  When set the downstream agent can use this to maintain
             conversation state across related interactions.

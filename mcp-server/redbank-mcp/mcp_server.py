@@ -15,7 +15,7 @@
 """RedBank PostgreSQL MCP Server — Kagenti edition.
 
 Adapted from redbank-demo/mcp-server to add:
-- AuthBridge-compatible JWT auth (trusts sidecar validation, with optional standalone JWKS verify)
+- JWT auth via Keycloak JWKS verification
 - RLS-aware database connections (app.current_role, app.current_user_email)
 - Admin/user role enforcement
 - Write tools: update_account, create_transaction
@@ -52,15 +52,9 @@ logger.info("MCP Server initialized: RedBank PostgreSQL (Kagenti)")
 #
 # Two modes of operation:
 #
-#   JWT_VERIFY=false (default) — "AuthBridge trusted" mode
-#     The Envoy sidecar (AuthBridge) has already validated the JWT signature,
-#     expiration, issuer, and audience via JWKS.  We decode without verification
-#     to extract identity claims.  This is the standard Kagenti deployment model.
+#   JWT_VERIFY=true — verify JWT signatures via JWKS_URL.
 #
-#   JWT_VERIFY=true — "standalone" mode
-#     No AuthBridge sidecar in front.  The MCP server fetches signing keys from
-#     JWKS_URL and verifies the JWT itself.  Use for dev clusters without Kagenti
-#     or as defense-in-depth.
+#   JWT_VERIFY=false — decode JWT without verification (trusted upstream).
 # ---------------------------------------------------------------------------
 
 JWKS_URL = os.getenv("JWKS_URL", "")
@@ -77,7 +71,7 @@ if JWT_VERIFY and JWKS_URL:
 elif JWT_VERIFY and not JWKS_URL:
     logger.warning("JWT_VERIFY=true but no JWKS_URL set — signature verification will fail")
 else:
-    logger.info("JWT verification disabled — trusting AuthBridge sidecar")
+    logger.info("JWT verification disabled — decoding without signature check")
 
 
 @dataclass
@@ -87,11 +81,10 @@ class AuthContext:
 
 
 def _extract_auth() -> AuthContext:
-    """Extract user identity from the AuthBridge-forwarded JWT.
+    """Extract user identity from the incoming JWT.
 
-    AuthBridge (Envoy + go-processor sidecar) performs RFC 8693 token exchange
-    and forwards an audience-scoped Bearer token on the Authorization header.
-    This function decodes the claims to determine identity and role.
+    Decodes the Bearer token on the Authorization header to determine
+    identity and role from Keycloak claims.
     """
     headers = get_http_headers()
     auth_header = headers.get("authorization", "")
@@ -126,7 +119,7 @@ def _extract_auth() -> AuthContext:
 
     claims = jwt.decode(token, **decode_kwargs)
 
-    # Keycloak/AuthBridge claim extraction — email with fallback chain
+    # Keycloak claim extraction — email with fallback chain
     email = (
         claims.get("email")
         or claims.get("preferred_username")
