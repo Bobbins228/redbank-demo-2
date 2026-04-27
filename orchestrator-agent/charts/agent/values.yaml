@@ -76,6 +76,14 @@ healthCheck:
 agentRuntime:
   enabled: false
 
+# SPIRE agent card signing — opt-in.
+# When enabled, an init container signs the agent card with a SPIRE SVID.
+agentCardSigning:
+  enabled: false
+  signerImage: "ghcr.io/kagenti/kagenti-operator/agentcard-signer:latest"
+  signedCardPath: "/opt/app-root/.well-known/agent-card.json"
+  unsignedCard: ""
+
 volumes: []
 volumeMounts: []
 

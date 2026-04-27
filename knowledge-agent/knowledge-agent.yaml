@@ -1,20 +1,134 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redbank-knowledge-agent-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: redbank-knowledge-agent-signer
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: redbank-knowledge-agent-signer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: redbank-knowledge-agent-signer
+subjects:
+  - kind: ServiceAccount
+    name: redbank-knowledge-agent-sa
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redbank-knowledge-agent-card-unsigned
+data:
+  agent.json: |
+    {
+      "name": "RedBank Knowledge Agent",
+      "description": "Read-only knowledge and data retrieval agent for the RedBank customer database and document knowledge base. Routes queries between semantic document search (RAG) and customer data lookups, all scoped by the caller's JWT role.",
+      "url": "http://redbank-knowledge-agent.${NAMESPACE}.svc.cluster.local:8002",
+      "version": "1.0.0",
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "capabilities": {
+        "streaming": false
+      },
+      "skills": [
+        {
+          "id": "knowledge_search",
+          "name": "Knowledge Search & Customer Data",
+          "description": "Read-only access to the RedBank knowledge base and customer database. Search policies, FAQs, and how-to guides via semantic search. Look up customers, view transactions and account summaries.",
+          "tags": ["knowledge", "rag", "read-only", "customer-data", "policies"],
+          "examples": [
+            "How do I reset my password?",
+            "What is the policy on overdraft fees?",
+            "What is my account balance?",
+            "Show me the transactions for customer 5",
+            "How do I open a savings account?"
+          ]
+        }
+      ],
+      "security": [{"bearer_auth": []}],
+      "securitySchemes": {
+        "bearer_auth": {
+          "type": "http",
+          "scheme": "Bearer",
+          "bearerFormat": "JWT",
+          "description": "Keycloak JWT for RedBank realm"
+        }
+      }
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redbank-knowledge-agent
   labels:
-    app.kubernetes.io/name: redbank-knowledge-agent
     protocol.kagenti.io/a2a: ""
+    app.kubernetes.io/name: redbank-knowledge-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: redbank-knowledge-agent
+      app.kubernetes.io/name: redbank-knowledge-agent
   template:
     metadata:
       labels:
-        app: redbank-knowledge-agent
+        app.kubernetes.io/name: redbank-knowledge-agent
+        kagenti.io/type: agent
+        protocol.kagenti.io/a2a: ""
+        istio.io/dataplane-mode: none
     spec:
+      serviceAccountName: redbank-knowledge-agent-sa
+      initContainers:
+      - name: sign-agentcard
+        image: ghcr.io/kagenti/kagenti-operator/agentcard-signer:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SPIFFE_ENDPOINT_SOCKET
+          value: unix:///run/spire/agent-sockets/spire-agent.sock
+        - name: UNSIGNED_CARD_PATH
+          value: /etc/agentcard/agent.json
+        - name: AGENT_CARD_PATH
+          value: /opt/app-root/.well-known/agent-card.json
+        - name: SIGN_TIMEOUT
+          value: "30s"
+        - name: AGENT_NAME
+          value: redbank-knowledge-agent
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: spire-agent-socket
+          mountPath: /run/spire/agent-sockets
+          readOnly: true
+        - name: unsigned-card
+          mountPath: /etc/agentcard
+          readOnly: true
+        - name: signed-card
+          mountPath: /opt/app-root/.well-known
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
       containers:
       - name: knowledge-agent
         image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-knowledge-agent:latest
@@ -44,6 +158,24 @@ spec:
           value: "${MLFLOW_TRACKING_URI}"
         - name: MLFLOW_TRACKING_INSECURE_TLS
           value: "true"
+        - name: AGENT_CARD_PATH
+          value: /opt/app-root/.well-known/agent-card.json
+        volumeMounts:
+        - name: signed-card
+          mountPath: /opt/app-root/.well-known
+          readOnly: true
+      volumes:
+      - name: spire-agent-socket
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true
+      - name: unsigned-card
+        configMap:
+          name: redbank-knowledge-agent-card-unsigned
+      - name: signed-card
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Mi
 ---
 apiVersion: v1
 kind: Service
@@ -51,10 +183,11 @@ metadata:
   name: redbank-knowledge-agent
   labels:
     protocol.kagenti.io/a2a: ""
+    kagenti.io/type: agent
     app.kubernetes.io/name: redbank-knowledge-agent
 spec:
   selector:
-    app: redbank-knowledge-agent
+    app.kubernetes.io/name: redbank-knowledge-agent
   ports:
   - name: http
     port: 8002

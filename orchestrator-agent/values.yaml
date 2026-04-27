@@ -5,6 +5,35 @@ extraLabels:
 
 agentRuntime:
   enabled: true
+
+agentCardSigning:
+  enabled: true
+  unsignedCard: |
+    {
+      "name": "RedBank Orchestrator Agent",
+      "description": "Multi-agent orchestrator that classifies user intent and routes queries to specialist agents (Knowledge and Banking) via A2A protocol.",
+      "url": "http://redbank-orchestrator.redbank-dev.svc.cluster.local:8080",
+      "version": "0.1.0",
+      "defaultInputModes": ["text"],
+      "defaultOutputModes": ["text"],
+      "capabilities": {
+        "streaming": false
+      },
+      "skills": [
+        {
+          "id": "orchestrator",
+          "name": "Multi-Agent Routing",
+          "description": "Routes user queries to the appropriate specialist agent via A2A discovery.",
+          "tags": ["orchestrator", "routing", "a2a"],
+          "examples": [
+            "How do I reset my password?",
+            "What is my account balance?",
+            "Update customer 5's phone number"
+          ]
+        }
+      ]
+    }
+
 env:
   LLM_MODEL: ""
   LLM_BASE_URL: ""

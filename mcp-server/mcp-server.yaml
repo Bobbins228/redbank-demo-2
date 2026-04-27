@@ -40,8 +40,6 @@ spec:
               name: postgresql-credentials
               key: POSTGRESQL_PASSWORD
         # JWT verification via Keycloak JWKS endpoint.
-        # With AuthBridge sidecar: set JWT_VERIFY=false (sidecar validates upstream).
-        # Without AuthBridge: set JWT_VERIFY=true to verify signatures directly.
         - name: JWT_VERIFY
           value: "true"
         - name: JWT_ALGORITHMS
@@ -58,7 +56,6 @@ spec:
         - name: ADMIN_ROLE_CLAIM
           value: "admin"
         # Default identity when no Bearer token is present (local dev only).
-        # In production with AuthBridge, unauthenticated requests never reach this container.
         - name: DEFAULT_ROLE
           value: "user"
         - name: DEFAULT_EMAIL

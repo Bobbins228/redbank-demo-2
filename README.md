@@ -2,7 +2,7 @@
 
 PostgreSQL database, MCP server, and A2A agents for the RedBank multi-agent banking demo, adapted for Kagenti deployment with Row-Level Security (RLS).
 
-Part of RHAISTRAT-1459 / RHAIENG-4555 (Epic) / RHAIENG-4556 (MCP Server) / RHAIENG-4558 (Knowledge Agent) / RHAIENG-4559 (Banking Agent).
+Part of RHAISTRAT-1459 / RHAIENG-4555 (Epic) / RHAIENG-4556 (MCP Server) / RHAIENG-4558 (Knowledge Agent) / RHAIENG-4559 (Banking Agent) / RHAIENG-4641 (SPIRE Signature Verification).
 
 ## Directory Layout
 
@@ -32,35 +32,35 @@ redbank-demo-2/
 │   └── deploy.sh                 OpenShift build + deploy
 ├── banking-agent/                A2A Banking Operations Agent (Agent C — admin CRUD)
 │   ├── src/banking_agent/
-│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── __main__.py           A2A server startup, signed card loading, MLflow init
 │   │   ├── agent.py              LangGraph ReAct agent + MCP client setup
 │   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── banking-agent.yaml        Deployment + Service
+│   ├── banking-agent.yaml        SA + RBAC + ConfigMap (unsigned card) + Deployment + Service
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── knowledge-agent/              A2A Knowledge Agent (Agent B — read-only RAG + data)
 │   ├── src/knowledge_agent/
-│   │   ├── __main__.py           A2A server startup, agent card, MLflow init
+│   │   ├── __main__.py           A2A server startup, signed card loading, MLflow init
 │   │   ├── agent.py              LangGraph ReAct agent + allow-list filter
 │   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
 │   ├── tests/                    Unit tests (mocked, no infra needed)
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── knowledge-agent.yaml      Deployment + Service
+│   ├── knowledge-agent.yaml      SA + RBAC + ConfigMap (unsigned card) + Deployment + Service
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── orchestrator-agent/           A2A Orchestrator Agent (Agent A — intent routing)
 │   ├── src/redbank_orchestrator/
-│   │   ├── server.py             Starlette app, A2A + /chat/completions + re-discovery
+│   │   ├── server.py             Starlette app, A2A + /chat/completions + signed card loading
 │   │   ├── agent.py              LangGraph agent builder from discovered peers
 │   │   ├── discovery.py          Peer discovery via K8s AgentCard CRDs
 │   │   ├── k8s_discovery.py      Kubernetes API client for AgentCard lookup
 │   │   ├── a2a_client.py         A2A message sender with token forwarding
 │   │   ├── tools.py              Dynamic tool creation from peer agent cards
 │   │   └── tracing.py            MLflow autolog configuration
-│   ├── charts/agent/             Helm chart for deployment
+│   ├── charts/agent/             Helm chart (with SPIRE agentcard-signing support)
 │   ├── examples/mock_agents.py   Mock agents for local testing
 │   ├── tests/                    Unit tests
 │   ├── pyproject.toml + uv.lock
@@ -73,10 +73,13 @@ redbank-demo-2/
 │   ├── pyproject.toml
 │   ├── Dockerfile
 │   └── deploy.sh                 OpenShift build + Helm deploy
+├── spire/                        SPIRE identity resources
+│   └── clusterspiffeid.yaml      ClusterSPIFFEID template for agent pods
 ├── scripts/
 │   ├── setup-keycloak.sh         Provision Keycloak realm, client, users, audience mapper
 │   ├── test-knowledge-agent.sh   Manual A2A agent test with Keycloak JWTs
 │   ├── test-search-knowledge.sh  Manual MCP tool test with Keycloak JWTs
+│   ├── verify-signatures.sh     Verify SPIRE agent card signing and identity binding
 │   └── cleanup.sh                Tear down deployed workloads + Keycloak realm
 ├── tests/
 │   └── test_mcp_rls.py           MCP-level integration tests (pytest)
@@ -100,19 +103,9 @@ Agent (A2A/MCP client)
   │  Authorization: Bearer <JWT>
   ▼
 ┌──────────────────────────────────────────────┐
-│  AuthBridge Sidecar (Envoy + go-processor)   │
-│                                              │
-│  1. Validate JWT (signature, exp, issuer)    │
-│  2. Token exchange (RFC 8693) for tool aud   │
-│  3. Forward with exchanged Bearer token      │
-└──────────────────┬───────────────────────────┘
-                   │
-                   │  Authorization: Bearer <exchanged-JWT>
-                   ▼
-┌──────────────────────────────────────────────┐
 │  FastMCP HTTP Server (:8000/mcp)             │
 │                                              │
-│  1. Verify JWT (JWKS) or decode (trusted)    │
+│  1. Verify JWT signature via JWKS            │
 │  2. Extract email + role from claims         │
 │  3. Check @admin_only (write tools)          │
 │  4. Open pooled DB connection                │
@@ -133,26 +126,15 @@ Agent (A2A/MCP client)
 └──────────────────────────────────────────────┘
 ```
 
-### AuthBridge Integration
+### JWT Authentication
 
-In a Kagenti deployment, the AuthBridge sidecar (Envoy + go-processor) handles JWT validation and RFC 8693 token exchange automatically. The flow is:
-
-1. Caller authenticates with Keycloak and receives a JWT
-2. Caller sends the request with `Authorization: Bearer <JWT>` to the MCP server
-3. The AuthBridge Envoy sidecar intercepts the request, validates the JWT (signature, expiration, issuer) via JWKS, and exchanges the token for an audience-scoped token targeting this tool
-4. The exchanged token reaches the MCP server container on the `Authorization` header
-
-The MCP server operates in two modes:
-
-**AuthBridge trusted mode** (`JWT_VERIFY=false`, default) — The sidecar has already validated the token. The server decodes the JWT without signature verification to extract identity claims. This is the standard Kagenti deployment model.
-
-**Standalone mode** (`JWT_VERIFY=true`) — No sidecar present. The server fetches signing keys from `JWKS_URL` (Keycloak JWKS endpoint) and verifies the JWT itself. Use for dev clusters without Kagenti or as defense-in-depth.
+The MCP server verifies Keycloak JWTs directly via JWKS (`JWT_VERIFY=true`). It fetches signing keys from the `JWKS_URL` (Keycloak JWKS endpoint) and verifies the JWT signature, expiration, and issuer.
 
 Identity is extracted from Keycloak JWT claims:
 - **email**: `claims.email` → `claims.preferred_username` → `claims.sub` (fallback chain)
 - **role**: `"admin"` if the `ADMIN_ROLE_CLAIM` value (default `"admin"`) appears in `realm_access.roles`, `resource_access.account.roles`, or `scope`
 
-When no Bearer token is present, the server falls back to `DEFAULT_ROLE` and `DEFAULT_EMAIL` environment variables. In production with AuthBridge, unauthenticated requests are rejected by the sidecar before they reach the MCP server.
+When no Bearer token is present, the server falls back to `DEFAULT_ROLE` and `DEFAULT_EMAIL` environment variables. In production, set `DEFAULT_ROLE=user` as a fail-safe so missing tokens get restricted access.
 
 ### Row-Level Security
 
@@ -207,16 +189,48 @@ Seed data includes 5 customers (Alice, Bob, Carol, David, John), 13 statements, 
 
 ### Kagenti Integration
 
-Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom resource (`agent.kagenti.dev/v1alpha1`). The `AgentRuntime` references the Deployment via `targetRef` — the operator then manages `kagenti.io/type` labels, sets a `kagenti.io/config-hash` annotation for rollout coordination, and enables AuthBridge sidecar injection at Pod admission.
+Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom resource (`agent.kagenti.dev/v1alpha1`). The `AgentRuntime` references the Deployment via `targetRef` — the operator then manages `kagenti.io/type` labels and sets a `kagenti.io/config-hash` annotation for rollout coordination. SPIRE identity is configured directly via CSI volumes in the deployment YAMLs.
 
-| Workload | AgentRuntime | `spec.type` | Protocol label |
-|----------|-------------|-------------|----------------|
-| `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | `protocol.kagenti.io/mcp: "true"` (Service) |
-| `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
-| `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
-| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | `protocol.kagenti.io/a2a: ""` (Deployment) |
+| Workload | AgentRuntime | `spec.type` | AgentCard | Protocol label |
+|----------|-------------|-------------|-----------|----------------|
+| `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | — | `protocol.kagenti.io/mcp: "true"` (Service) |
+| `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
+| `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
+| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment) |
 
 The `kagenti.io/type` label on Deployments is managed by the operator — do not set it manually. Protocol labels on Services (`protocol.kagenti.io/a2a`, `protocol.kagenti.io/mcp`) remain in the Service manifests since they drive AgentCard sync and tool discovery independently.
+
+### SPIRE AgentCard Signature Verification (RHAIENG-4641)
+
+All three A2A agents (banking, knowledge, orchestrator) use SPIRE-based cryptographic identity to sign their AgentCards. This ensures that each agent's identity is cryptographically bound to its SPIFFE ID, preventing card spoofing.
+
+**How it works:**
+
+1. A `ClusterSPIFFEID` (`spire/clusterspiffeid.yaml`) registers a SPIFFE ID template for pods labeled `kagenti.io/type: agent` in namespaces labeled `agentcard: "true"`
+2. Each agent deployment YAML defines the SPIRE CSI volume (`csi.spiffe.io`) explicitly, along with an unsigned-card ConfigMap and a signed-card emptyDir volume
+3. A `sign-agentcard` init container mounts the SPIRE agent socket via the CSI driver, fetches a SPIRE SVID, and signs the unsigned agent card (from the ConfigMap) with a JWS ES256 signature
+4. The signed card is written to the emptyDir volume and mounted read-only into the main container, which loads it at startup via `_load_agent_card()` (falling back to in-memory construction for local dev)
+5. The operator's AgentCard controller fetches the served card via HTTP, verifies the JWS signature against the SPIRE trust bundle, and confirms the SPIFFE ID matches the expected identity
+
+**Direct SPIRE integration:** We label the namespace with `agentcard=true` (for SPIRE identity registration) and define the CSI volume directly in the deployment YAMLs. This gives us cryptographic identity verification with the standard `restricted` SCC and no webhook dependency for pod creation.
+
+**AgentCard CRs** are auto-generated by the operator from the `AgentRuntime`. The operator verifies the JWS signature and SPIFFE identity binding automatically.
+
+**Verification status:**
+
+| Field | Description |
+|-------|-------------|
+| `SignatureVerified` | JWS signature is valid (ES256, verified against SPIRE trust bundle) |
+| `Bound` | SPIFFE ID from x5c certificate matches the expected trust domain |
+| `signatureIdentityMatch` | Both signature and identity binding pass |
+| `agent.kagenti.dev/signature-verified` | Label propagated to pod template when verified |
+
+**SPIFFE IDs follow the pattern:**
+```
+spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>
+```
+
+For example: `spiffe://apps.rosa.redbank-demo2.ij5f.p3.openshiftapps.com/ns/redbank-dev/sa/redbank-banking-agent-sa`
 
 Verify enrollment:
 
@@ -229,10 +243,10 @@ oc get agentruntimes
 # redbank-orchestrator-runtime        agent   redbank-orchestrator      Active  ...
 
 oc get agentcards
-# NAME                                      PROTOCOL   KIND         TARGET                    AGENT                     SYNCED
-# redbank-banking-agent-deployment-card      a2a        Deployment   redbank-banking-agent     RedBank Banking...        True
-# redbank-knowledge-agent-deployment-card    a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...      True
-# redbank-orchestrator-deployment-card       a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...   True
+# NAME                                      PROTOCOL   KIND         TARGET                    AGENT                     VERIFIED   BOUND   SYNCED
+# redbank-banking-agent-deployment-card     a2a        Deployment   redbank-banking-agent     RedBank Banking...        true       true    True
+# redbank-knowledge-agent-deployment-card   a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...      true       true    True
+# redbank-orchestrator-deployment-card      a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...   true       true    True
 ```
 
 ### Banking Operations Agent (Agent C)
@@ -245,7 +259,7 @@ The Banking Operations Agent is an A2A service built with LangGraph that provide
 - **MCP client**: `MultiServerMCPClient` connected to the PostgreSQL MCP server over HTTP
 - **LLM**: Configurable — vLLM (default) or OpenAI via `ChatOpenAI` with `base_url` override
 - **Observability**: MLflow LangChain autolog (`mlflow.langchain.autolog()`)
-- **Auth**: Trusts AuthBridge sidecar for Tier 1 admin gating. Propagates the incoming Bearer JWT to the MCP server so RLS policies apply.
+- **Auth**: Propagates the incoming Bearer JWT to the MCP server so RLS policies apply. Admin gating is enforced at the MCP tool level (`@admin_only`).
 
 **Error handling:**
 - MCP tool errors (auth denials, validation failures, DB errors) are intercepted and returned to the LLM as text rather than crashing the agent. The system prompt instructs the LLM to relay permission errors and empty results to the user without hallucinating data.
@@ -253,15 +267,15 @@ The Banking Operations Agent is an A2A service built with LangGraph that provide
 - All other agent execution errors are caught and returned as a generic error message.
 
 **Kagenti enrollment:**
-- **AgentRuntime**: `redbank-banking-agent-runtime` (type: `agent`) — operator manages `kagenti.io/type` label and AuthBridge injection
+- **AgentRuntime**: `redbank-banking-agent-runtime` (type: `agent`) — operator manages `kagenti.io/type` label
+- **AgentCard**: auto-generated by operator, SPIRE signature verification
 - **Service**: `protocol.kagenti.io/a2a: ""` — enables AgentCard sync and A2A discovery
 
 **Token flow:**
 1. Caller sends A2A request with `Authorization: Bearer <JWT>`
-2. AuthBridge sidecar validates the token and rejects non-admin users (Tier 1)
-3. Agent extracts the Bearer token from the incoming request
-4. Agent passes the token as a header to `MultiServerMCPClient`
-5. MCP server applies RLS based on the JWT claims (Tier 2)
+2. Agent extracts the Bearer token from the incoming request
+3. Agent passes the token as a header to `MultiServerMCPClient`
+4. MCP server applies RLS based on the JWT claims
 
 ### Knowledge Agent (Agent B)
 
@@ -286,6 +300,7 @@ The Knowledge Agent is a read-only A2A service built with LangGraph that provide
 
 **Kagenti enrollment:**
 - **AgentRuntime**: `redbank-knowledge-agent-runtime` (type: `agent`)
+- **AgentCard**: auto-generated by operator, SPIRE signature verification
 - **Deployment + Service**: `protocol.kagenti.io/a2a: ""` label for AgentCard discovery
 
 ### Orchestrator Agent (Agent A)
@@ -305,6 +320,11 @@ The Orchestrator Agent is the entry point for user interactions. It classifies u
 - Each discovered peer becomes a LangChain `StructuredTool` with name and description derived from the peer's agent card
 - The system prompt is rebuilt dynamically from discovered agent card metadata (names, descriptions, skills, examples)
 - If no peers are discovered, the orchestrator informs the user that the system is starting up
+
+**Kagenti enrollment:**
+- **AgentRuntime**: via Helm chart `agentruntime.yaml` (type: `agent`)
+- **AgentCard**: auto-generated by operator, SPIRE signature verification
+- **SPIRE signing**: enabled via `agentCardSigning.enabled: true` in `values.yaml` — adds `sign-agentcard` init container and SPIRE CSI volume to the Helm-deployed pod
 
 **Token propagation:**
 1. User sends request with `Authorization: Bearer <JWT>` to `/chat/completions`
@@ -330,7 +350,7 @@ The Banking Agent (Agent C) and Knowledge Agent (Agent B) are designed to be cal
 - **Discovery**: The orchestrator discovers peers via `protocol.kagenti.io/a2a` service labels
 - **A2A protocol**: Agents accept `message/send` JSON-RPC requests at their service URL
 - **Token propagation**: The orchestrator forwards the user's Bearer JWT in the `Authorization` header. Agents pass it through to the MCP server, preserving the full identity chain.
-- **Access gating**: With AuthBridge deployed, non-admin users are rejected at the network level (Tier 1) before reaching the Banking Agent. Without AuthBridge, the MCP server's `@admin_only` decorator enforces this at the tool level (Tier 2).
+- **Access gating**: The MCP server's `@admin_only` decorator enforces write restrictions at the tool level, and RLS enforces read scoping at the database level.
 
 ## RAG Pipeline (LangChain + PGVector)
 
@@ -419,10 +439,53 @@ All deployment is driven through a single top-level `Makefile` and `.env` file. 
 
 ### Prerequisites
 
+**Cluster tools:**
 - OpenShift cluster with `oc` CLI authenticated
-- Keycloak deployed (the setup script provisions a realm and demo users)
 - `helm` CLI installed (for orchestrator and playground)
 - An OpenAI-compatible LLM endpoint (e.g. vLLM)
+
+**Keycloak** (for JWT authentication):
+- Keycloak deployed in the cluster (the setup script provisions a realm and demo users)
+
+**SPIRE** (for AgentCard signature verification):
+- SPIRE server and agents running (namespace: `zero-trust-workload-identity-manager`)
+- SPIFFE CSI driver registered: `oc get csidrivers csi.spiffe.io`
+- SPIRE controller manager for `ClusterSPIFFEID` CRD: `oc get crd clusterspiffeids.spire.spiffe.io`
+- SPIRE trust bundle ConfigMap accessible to the operator
+
+**kagenti-operator** (for AgentRuntime/AgentCard management):
+- kagenti-operator deployed with the following flags enabled:
+  ```
+  --require-a2a-signature=true
+  --spire-trust-domain=<cluster-trust-domain>
+  --spire-trust-bundle-configmap=spire-bundle
+  --spire-trust-bundle-configmap-namespace=zero-trust-workload-identity-manager
+  ```
+- AgentCard and AgentRuntime CRDs installed: `oc get crd agentcards.agent.kagenti.dev agentruntimes.agent.kagenti.dev`
+- cert-manager installed (for operator webhook TLS certificates)
+
+**Verify prerequisites:**
+
+```bash
+# SPIRE infrastructure
+oc get csidrivers csi.spiffe.io
+oc get crd clusterspiffeids.spire.spiffe.io
+oc get pods -n zero-trust-workload-identity-manager | grep spire
+
+# SPIRE trust bundle (used by operator for signature verification)
+oc get configmap spire-bundle -n zero-trust-workload-identity-manager
+
+# kagenti-operator
+oc get deployment kagenti-controller-manager -n kagenti-system
+oc get crd agentcards.agent.kagenti.dev agentruntimes.agent.kagenti.dev
+
+# Verify signature verification is enabled
+oc get deployment kagenti-controller-manager -n kagenti-system \
+  -o jsonpath='{.spec.template.spec.containers[0].args}' | tr ',' '\n' | grep signature
+
+# cert-manager (required for operator webhook TLS)
+oc get pods -n cert-manager
+```
 
 ### Quick Start
 
@@ -433,7 +496,7 @@ make init
 # 2. Edit .env with your configuration (see below)
 vi .env
 
-# 3. Deploy everything (Keycloak setup + DB + MCP + agents + playground)
+# 3. Deploy everything (Keycloak setup + SPIRE + DB + MCP + agents + playground)
 make deploy
 
 # 4. Grant schema CREATE to 'app' role (required for PGVector metadata tables)
@@ -443,10 +506,11 @@ oc exec deployment/postgresql -- psql -U user -d db -c "GRANT CREATE ON SCHEMA p
 make compile-pipeline
 # Upload and run pgvector_rag_pipeline.yaml in OpenShift AI
 
-# 6. Verify
+# 7. Verify
 oc get pods
 oc get agentruntimes
-oc get agentcards
+oc get agentcards   # expect VERIFIED=true, BOUND=true for all three agents
+make verify-signatures
 ```
 
 ### Environment Variables (.env)
@@ -476,20 +540,22 @@ All configuration lives in a single `.env` file at the project root. Run `make i
 |--------|-------------|
 | `make help` | Show all available targets |
 | `make init` | Create `.env` from `.env.example` |
-| `make deploy` | Deploy everything (Keycloak + DB + MCP + all agents + playground) |
+| `make deploy` | Deploy everything (Keycloak + SPIRE + DB + MCP + all agents + playground) |
 | `make setup-keycloak` | Provision Keycloak realm, client, audience mapper, roles, and demo users |
+| `make deploy-spire` | Apply ClusterSPIFFEID for SPIRE agent card signing |
 | `make deploy-db` | Create namespace and apply Kustomize (Secret + ConfigMap + Deployment + Service) |
 | `make deploy-mcp` | Build MCP server image via `oc new-build` and deploy |
 | `make deploy-banking` | Build and deploy Banking Operations Agent |
 | `make deploy-knowledge` | Build and deploy Knowledge Agent |
 | `make deploy-orchestrator` | Build and deploy Orchestrator Agent (Helm) |
 | `make deploy-playground` | Build and deploy Playground UI (Helm) |
+| `make verify-signatures` | Verify SPIRE agent card signing and identity binding |
 | `make clean` | Tear down all workloads + Keycloak realm (keeps namespace and build configs) |
 | `make test-pgvector` | Run pgvector schema + RLS tests (requires Podman) |
 | `make test-knowledge-agent` | Run A2A tests against Knowledge Agent with Keycloak JWTs |
 | `make compile-pipeline` | Compile the KFP pipeline to YAML |
 
-`make deploy` runs the targets in order: `setup-keycloak` → `deploy-db` → `deploy-mcp` → `deploy-banking` → `deploy-knowledge` → `deploy-orchestrator` → `deploy-playground`.
+`make deploy` runs the targets in order: `setup-keycloak` → `deploy-db` → `deploy-spire` → `deploy-mcp` → `deploy-banking` → `deploy-knowledge` → `deploy-orchestrator` → `deploy-playground`.
 
 ### Deploy Individual Components
 
@@ -507,16 +573,18 @@ make clean
 ```
 
 This removes:
-- All AgentRuntime CRs
+- All AgentRuntime and AgentCard CRs
 - Agent deployments and services
 - Helm releases (orchestrator + playground)
+- Unsigned card ConfigMaps
+- Agent ServiceAccounts and RBAC (signer roles)
 - PostgreSQL deployment, service, and PVC
 - Secrets and configmaps
 - Keycloak `redbank` realm (including users, client, roles)
 
-The namespace and OpenShift build configs are retained.
+The namespace, ClusterSPIFFEID, and OpenShift build configs are retained.
 
-> **Note:** Tier 1 access gating (non-admin rejection at the network level) requires the Kagenti AuthBridge sidecar, which is injected by the Kagenti operator. Without it, the MCP server's `@admin_only` decorator still enforces write restrictions at the tool level (Tier 2), and RLS enforces read scoping at the database level.
+> **Note:** Access control is enforced at the MCP tool level (`@admin_only` decorator) and the database level (RLS). JWT authentication is handled directly by the MCP server via JWKS verification.
 
 ## Manual Testing
 
@@ -781,7 +849,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `POSTGRES_USER` | `user` | Database user |
 | `POSTGRES_PASSWORD` | `pass` | Database password |
 | `POSTGRES_PORT` | `5432` | Database port |
-| `JWT_VERIFY` | `false` | `false` = trust AuthBridge sidecar; `true` = verify JWT via JWKS |
+| `JWT_VERIFY` | `true` | `true` = verify JWT signature via JWKS; `false` = decode without verification (trusted upstream) |
 | `JWT_ALGORITHMS` | `RS256` | Comma-separated JWT algorithms |
 | `JWKS_URL` | (empty) | Keycloak JWKS endpoint (required when `JWT_VERIFY=true`) |
 | `JWT_AUDIENCE` | (empty) | Expected JWT `aud` claim |
@@ -804,6 +872,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-banking-agent:8001` | Agent's own URL (used in agent card) |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 
 ### Knowledge Agent
 
@@ -817,6 +886,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `OPENAI_API_KEY` | (required) | API key for the LLM endpoint |
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `AGENT_URL` | `http://redbank-knowledge-agent:8002` | Agent's own URL (used in agent card) |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 
 ### Orchestrator Agent
 
@@ -829,6 +899,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `MLFLOW_EXPERIMENT_NAME` | `default-agent-experiment` | MLflow experiment name |
 | `AGENT_PUBLIC_URL` | `http://localhost:{PORT}` | Public URL for agent card |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 ### Playground
@@ -844,18 +915,7 @@ These are the env vars each component reads at runtime (set automatically by the
 
 ### Production Configuration
 
-**With AuthBridge sidecar** (standard Kagenti deployment) — the sidecar validates and exchanges tokens upstream. The MCP server decodes the trusted token without re-verifying the signature:
-
-```yaml
-- name: JWT_VERIFY
-  value: "false"
-- name: JWT_AUDIENCE
-  value: "redbank-mcp"   # AuthBridge token exchange sets this audience
-- name: DEFAULT_ROLE
-  value: "user"           # fail-safe: no token = restricted access
-```
-
-**Standalone deployment** (no AuthBridge, e.g. dev cluster) — the MCP server verifies JWT signatures directly via JWKS:
+The MCP server verifies JWT signatures directly via JWKS:
 
 ```yaml
 - name: JWT_VERIFY

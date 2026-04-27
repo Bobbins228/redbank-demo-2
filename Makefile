@@ -5,7 +5,7 @@ export NAMESPACE
 
 LOAD_ENV = [ -f .env ] || { echo "ERROR: .env not found — run 'make init' first"; exit 1; } && set -a && source .env && set +a
 
-.PHONY: init deploy deploy-db deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground clean setup-keycloak test-pgvector compile-pipeline test-knowledge-agent help
+.PHONY: init deploy deploy-db deploy-spire deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground clean setup-keycloak test-pgvector compile-pipeline test-knowledge-agent verify-signatures help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-24s %s\n", $$1, $$2}'
@@ -13,13 +13,16 @@ help: ## Show this help
 init: ## Create .env from .env.example
 	@if [ ! -f .env ]; then cp .env.example .env && echo "Created .env from .env.example — edit it with your configuration"; else echo ".env already exists — skipping"; fi
 
-deploy: setup-keycloak deploy-db deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground ## Deploy all RedBank components
+deploy: setup-keycloak deploy-db deploy-spire deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground ## Deploy all RedBank components
 	@echo "" && echo "RedBank Kagenti demo deployed to namespace $${NAMESPACE:-redbank-demo}"
 
 deploy-db: ## Deploy PostgreSQL database
 	@$(LOAD_ENV) && \
 	  oc new-project $${NAMESPACE} 2>/dev/null || oc project $${NAMESPACE} && \
 	  cd postgres-db && oc apply -k .
+
+deploy-spire: ## Apply ClusterSPIFFEID for SPIRE agent card signing
+	oc apply -f spire/clusterspiffeid.yaml
 
 deploy-mcp: ## Build and deploy MCP server
 	@$(LOAD_ENV) && cd mcp-server && bash deploy.sh
@@ -47,6 +50,9 @@ test-pgvector: ## Run PGVector tests
 
 compile-pipeline: ## Compile the RAG pipeline
 	cd langchain-pgvector/pipeline && python3 pgvector_rag_pipeline.py
+
+verify-signatures: ## Verify SPIRE agent card signing and identity binding
+	bash scripts/verify-signatures.sh
 
 test-knowledge-agent: ## Test knowledge agent (port-forwards and runs tests)
 	@echo "Port-forwarding knowledge agent (background)..."

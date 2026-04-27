@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from pathlib import Path
 
 import mlflow
 import uvicorn
@@ -32,6 +34,10 @@ logger = logging.getLogger(__name__)
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8001"))
 AGENT_URL = os.getenv("AGENT_URL", f"http://localhost:{PORT}")
+AGENT_CARD_PATH = os.getenv(
+    "AGENT_CARD_PATH",
+    "/opt/app-root/.well-known/agent-card.json",
+)
 
 
 class BearerTokenContextBuilder(CallContextBuilder):
@@ -92,6 +98,18 @@ def _build_agent_card() -> AgentCard:
     )
 
 
+def _load_agent_card() -> AgentCard:
+    card_file = Path(AGENT_CARD_PATH)
+    if card_file.is_file():
+        logger.info("Loading signed agent card from %s", card_file)
+        return AgentCard.model_validate(json.loads(card_file.read_text()))
+    logger.warning(
+        "Signed agent card not found at %s — building in memory",
+        card_file,
+    )
+    return _build_agent_card()
+
+
 def _configure_mlflow() -> None:
     """Configure MLflow tracking against OpenShift AI's in-cluster MLflow."""
     uri = os.getenv("MLFLOW_TRACKING_URI", "").strip()
@@ -102,22 +120,25 @@ def _configure_mlflow() -> None:
     if os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "").lower() in ("true", "1"):
         os.environ["MLFLOW_TRACKING_INSECURE_TLS"] = "true"
 
-    mlflow.set_tracking_uri(uri)
-    experiment = os.getenv("MLFLOW_EXPERIMENT_NAME", "banking-agent")
-    mlflow.set_experiment(experiment)
-    mlflow.langchain.autolog()
-    auth = os.getenv("MLFLOW_TRACKING_AUTH", "default")
-    insecure = os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "false")
-    logger.info(
-        "MLflow: tracking_uri=%s experiment=%s auth=%s insecure_tls=%s",
-        uri, experiment, auth, insecure,
-    )
+    try:
+        mlflow.set_tracking_uri(uri)
+        experiment = os.getenv("MLFLOW_EXPERIMENT_NAME", "banking-agent")
+        mlflow.set_experiment(experiment)
+        mlflow.langchain.autolog()
+        auth = os.getenv("MLFLOW_TRACKING_AUTH", "default")
+        insecure = os.getenv("MLFLOW_TRACKING_INSECURE_TLS", "false")
+        logger.info(
+            "MLflow: tracking_uri=%s experiment=%s auth=%s insecure_tls=%s",
+            uri, experiment, auth, insecure,
+        )
+    except Exception:
+        logger.warning("MLflow connection failed — tracing disabled", exc_info=True)
 
 
 def main() -> None:
     _configure_mlflow()
 
-    agent_card = _build_agent_card()
+    agent_card = _load_agent_card()
     logger.info("Agent card: %s @ %s", agent_card.name, agent_card.url)
 
     handler = DefaultRequestHandler(

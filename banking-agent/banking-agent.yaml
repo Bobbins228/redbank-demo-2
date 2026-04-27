@@ -1,20 +1,132 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redbank-banking-agent-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: redbank-banking-agent-signer
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: redbank-banking-agent-signer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: redbank-banking-agent-signer
+subjects:
+  - kind: ServiceAccount
+    name: redbank-banking-agent-sa
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redbank-banking-agent-card-unsigned
+data:
+  agent.json: |
+    {
+      "name": "RedBank Banking Operations Agent",
+      "description": "Admin-only banking operations agent with write access to the RedBank customer database via MCP. Handles account updates and new transaction creation. Read-only queries (transaction history, account summaries, document search) are handled by the Knowledge Agent.",
+      "url": "http://redbank-banking-agent.${NAMESPACE}.svc.cluster.local:8001",
+      "version": "1.0.0",
+      "defaultInputModes": ["text"],
+      "defaultOutputModes": ["text"],
+      "capabilities": {
+        "streaming": false
+      },
+      "skills": [
+        {
+          "id": "banking_operations",
+          "name": "Banking Operations",
+          "description": "Admin-only write access to the RedBank customer database. Update account details and create new transactions. Read-only queries should be directed to the Knowledge Agent.",
+          "tags": ["banking", "admin", "write", "transactions", "account-updates"],
+          "examples": [
+            "Update customer 5's phone number to 555-1234",
+            "Create a $500 credit transaction for customer 2",
+            "Change the address for alice.johnson@email.com"
+          ]
+        }
+      ],
+      "security": [{"bearer_auth": []}],
+      "securitySchemes": {
+        "bearer_auth": {
+          "type": "http",
+          "scheme": "Bearer",
+          "bearerFormat": "JWT",
+          "description": "Keycloak JWT for RedBank realm"
+        }
+      }
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redbank-banking-agent
   labels:
-    app.kubernetes.io/name: redbank-banking-agent
     protocol.kagenti.io/a2a: ""
+    app.kubernetes.io/name: redbank-banking-agent
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: redbank-banking-agent
+      app.kubernetes.io/name: redbank-banking-agent
   template:
     metadata:
       labels:
-        app: redbank-banking-agent
+        app.kubernetes.io/name: redbank-banking-agent
+        kagenti.io/type: agent
+        protocol.kagenti.io/a2a: ""
+        istio.io/dataplane-mode: none
     spec:
+      serviceAccountName: redbank-banking-agent-sa
+      initContainers:
+      - name: sign-agentcard
+        image: ghcr.io/kagenti/kagenti-operator/agentcard-signer:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SPIFFE_ENDPOINT_SOCKET
+          value: unix:///run/spire/agent-sockets/spire-agent.sock
+        - name: UNSIGNED_CARD_PATH
+          value: /etc/agentcard/agent.json
+        - name: AGENT_CARD_PATH
+          value: /opt/app-root/.well-known/agent-card.json
+        - name: SIGN_TIMEOUT
+          value: "30s"
+        - name: AGENT_NAME
+          value: redbank-banking-agent
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: spire-agent-socket
+          mountPath: /run/spire/agent-sockets
+          readOnly: true
+        - name: unsigned-card
+          mountPath: /etc/agentcard
+          readOnly: true
+        - name: signed-card
+          mountPath: /opt/app-root/.well-known
+        securityContext:
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 32Mi
       containers:
       - name: banking-agent
         image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-banking-agent:latest
@@ -31,24 +143,37 @@ spec:
           value: "http://redbank-mcp-server:8000/mcp"
         - name: AGENT_URL
           value: "http://redbank-banking-agent:8001"
-        # LLM configuration — set LLM_BASE_URL to your vLLM or OpenAI-compatible endpoint.
         - name: LLM_BASE_URL
           value: "${LLM_BASE_URL}"
         - name: LLM_MODEL
           value: "${LLM_MODEL}"
-        # API key for the LLM endpoint (vLLM or OpenAI).
-        # Create the secret: oc create secret generic llm-credentials --from-literal=OPENAI_API_KEY=<key>
         - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: llm-credentials
               key: OPENAI_API_KEY
-        # MLflow tracing — set to your OpenShift AI MLflow route.
-        # Omit or leave empty to disable remote tracking.
         - name: MLFLOW_TRACKING_URI
           value: "${MLFLOW_TRACKING_URI}"
         - name: MLFLOW_TRACKING_INSECURE_TLS
           value: "true"
+        - name: AGENT_CARD_PATH
+          value: /opt/app-root/.well-known/agent-card.json
+        volumeMounts:
+        - name: signed-card
+          mountPath: /opt/app-root/.well-known
+          readOnly: true
+      volumes:
+      - name: spire-agent-socket
+        csi:
+          driver: csi.spiffe.io
+          readOnly: true
+      - name: unsigned-card
+        configMap:
+          name: redbank-banking-agent-card-unsigned
+      - name: signed-card
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Mi
 ---
 apiVersion: v1
 kind: Service
@@ -60,7 +185,7 @@ metadata:
     app.kubernetes.io/name: redbank-banking-agent
 spec:
   selector:
-    app: redbank-banking-agent
+    app.kubernetes.io/name: redbank-banking-agent
   ports:
   - name: http
     port: 8001

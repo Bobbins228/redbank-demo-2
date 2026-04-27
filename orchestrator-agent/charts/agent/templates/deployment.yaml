@@ -21,6 +21,50 @@ spec:
       {{- end }}
       securityContext:
         runAsNonRoot: true
+      {{- if .Values.agentCardSigning.enabled }}
+      initContainers:
+        - name: sign-agentcard
+          image: {{ .Values.agentCardSigning.signerImage }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SPIFFE_ENDPOINT_SOCKET
+              value: unix:///run/spire/agent-sockets/spire-agent.sock
+            - name: UNSIGNED_CARD_PATH
+              value: /etc/agentcard/agent.json
+            - name: AGENT_CARD_PATH
+              value: {{ .Values.agentCardSigning.signedCardPath }}
+            - name: SIGN_TIMEOUT
+              value: "30s"
+            - name: AGENT_NAME
+              value: {{ include "agent.fullname" . }}
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent-sockets
+              readOnly: true
+            - name: unsigned-card
+              mountPath: /etc/agentcard
+              readOnly: true
+            - name: signed-card
+              mountPath: {{ dir .Values.agentCardSigning.signedCardPath }}
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+      {{- end }}
       containers:
         - name: {{ include "agent.name" . }}
           image: "{{ required "image.repository is required — set CONTAINER_IMAGE in .env" .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -38,6 +82,10 @@ spec:
               value: {{ .Values.service.port | quote }}
             - name: AGENT_SELF_NAME
               value: {{ include "agent.fullname" . | quote }}
+            {{- if .Values.agentCardSigning.enabled }}
+            - name: AGENT_CARD_PATH
+              value: {{ .Values.agentCardSigning.signedCardPath | quote }}
+            {{- end }}
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
@@ -88,11 +136,29 @@ spec:
             initialDelaySeconds: {{ .Values.healthCheck.readinessInitialDelay }}
             periodSeconds: {{ .Values.healthCheck.readinessPeriod }}
             timeoutSeconds: {{ .Values.healthCheck.readinessTimeout }}
-          {{- with .Values.volumeMounts }}
           volumeMounts:
+          {{- if .Values.agentCardSigning.enabled }}
+            - name: signed-card
+              mountPath: {{ dir .Values.agentCardSigning.signedCardPath }}
+              readOnly: true
+          {{- end }}
+          {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- with .Values.volumes }}
       volumes:
+      {{- if .Values.agentCardSigning.enabled }}
+        - name: spire-agent-socket
+          csi:
+            driver: csi.spiffe.io
+            readOnly: true
+        - name: unsigned-card
+          configMap:
+            name: {{ include "agent.fullname" . }}-card-unsigned
+        - name: signed-card
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+      {{- end }}
+      {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
