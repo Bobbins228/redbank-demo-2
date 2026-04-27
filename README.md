@@ -439,12 +439,53 @@ All deployment is driven through a single top-level `Makefile` and `.env` file. 
 
 ### Prerequisites
 
+**Cluster tools:**
 - OpenShift cluster with `oc` CLI authenticated
-- Keycloak deployed (the setup script provisions a realm and demo users)
 - `helm` CLI installed (for orchestrator and playground)
-- SPIRE deployed with CSI driver (for agent card signing): `oc get csidrivers | grep csi.spiffe.io`
-- kagenti-operator installed with signature verification enabled
 - An OpenAI-compatible LLM endpoint (e.g. vLLM)
+
+**Keycloak** (for JWT authentication):
+- Keycloak deployed in the cluster (the setup script provisions a realm and demo users)
+
+**SPIRE** (for AgentCard signature verification):
+- SPIRE server and agents running (namespace: `zero-trust-workload-identity-manager`)
+- SPIFFE CSI driver registered: `oc get csidrivers csi.spiffe.io`
+- SPIRE controller manager for `ClusterSPIFFEID` CRD: `oc get crd clusterspiffeids.spire.spiffe.io`
+- SPIRE trust bundle ConfigMap accessible to the operator
+
+**kagenti-operator** (for AgentRuntime/AgentCard management):
+- kagenti-operator deployed with the following flags enabled:
+  ```
+  --require-a2a-signature=true
+  --spire-trust-domain=<cluster-trust-domain>
+  --spire-trust-bundle-configmap=spire-bundle
+  --spire-trust-bundle-configmap-namespace=zero-trust-workload-identity-manager
+  ```
+- AgentCard and AgentRuntime CRDs installed: `oc get crd agentcards.agent.kagenti.dev agentruntimes.agent.kagenti.dev`
+- cert-manager installed (for operator webhook TLS certificates)
+
+**Verify prerequisites:**
+
+```bash
+# SPIRE infrastructure
+oc get csidrivers csi.spiffe.io
+oc get crd clusterspiffeids.spire.spiffe.io
+oc get pods -n zero-trust-workload-identity-manager | grep spire
+
+# SPIRE trust bundle (used by operator for signature verification)
+oc get configmap spire-bundle -n zero-trust-workload-identity-manager
+
+# kagenti-operator
+oc get deployment kagenti-controller-manager -n kagenti-system
+oc get crd agentcards.agent.kagenti.dev agentruntimes.agent.kagenti.dev
+
+# Verify signature verification is enabled
+oc get deployment kagenti-controller-manager -n kagenti-system \
+  -o jsonpath='{.spec.template.spec.containers[0].args}' | tr ',' '\n' | grep signature
+
+# cert-manager (required for operator webhook TLS)
+oc get pods -n cert-manager
+```
 
 ### Quick Start
 
