@@ -37,7 +37,7 @@ redbank-demo-2/
 │   │   └── agent_executor.py     A2A <-> LangGraph bridge with token propagation
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── banking-agent.yaml        ConfigMap (unsigned card) + Deployment + Service
+│   ├── banking-agent.yaml        SA + RBAC + ConfigMap (unsigned card) + Deployment + Service
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── knowledge-agent/              A2A Knowledge Agent (Agent B — read-only RAG + data)
@@ -48,19 +48,19 @@ redbank-demo-2/
 │   ├── tests/                    Unit tests (mocked, no infra needed)
 │   ├── pyproject.toml
 │   ├── Dockerfile
-│   ├── knowledge-agent.yaml      ConfigMap (unsigned card) + Deployment + Service
+│   ├── knowledge-agent.yaml      SA + RBAC + ConfigMap (unsigned card) + Deployment + Service
 │   ├── agentruntime.yaml         AgentRuntime CR (type: agent)
 │   └── deploy.sh                 OpenShift build + deploy
 ├── orchestrator-agent/           A2A Orchestrator Agent (Agent A — intent routing)
 │   ├── src/redbank_orchestrator/
-│   │   ├── server.py             Starlette app, A2A + /chat/completions + re-discovery
+│   │   ├── server.py             Starlette app, A2A + /chat/completions + signed card loading
 │   │   ├── agent.py              LangGraph agent builder from discovered peers
 │   │   ├── discovery.py          Peer discovery via K8s AgentCard CRDs
 │   │   ├── k8s_discovery.py      Kubernetes API client for AgentCard lookup
 │   │   ├── a2a_client.py         A2A message sender with token forwarding
 │   │   ├── tools.py              Dynamic tool creation from peer agent cards
 │   │   └── tracing.py            MLflow autolog configuration
-│   ├── charts/agent/             Helm chart for deployment
+│   ├── charts/agent/             Helm chart (with SPIRE agentcard-signing support)
 │   ├── examples/mock_agents.py   Mock agents for local testing
 │   ├── tests/                    Unit tests
 │   ├── pyproject.toml + uv.lock
@@ -196,13 +196,13 @@ Each workload is enrolled into the Kagenti platform via an `AgentRuntime` custom
 | `redbank-mcp-server` | `redbank-mcp-server-runtime` | `tool` | — | `protocol.kagenti.io/mcp: "true"` (Service) |
 | `redbank-banking-agent` | `redbank-banking-agent-runtime` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
 | `redbank-knowledge-agent` | `redbank-knowledge-agent-runtime` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment + Service) |
-| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | — | `protocol.kagenti.io/a2a: ""` (Deployment) |
+| `redbank-orchestrator` | via Helm chart `agentruntime.yaml` | `agent` | auto-generated | `protocol.kagenti.io/a2a: ""` (Deployment) |
 
 The `kagenti.io/type` label on Deployments is managed by the operator — do not set it manually. Protocol labels on Services (`protocol.kagenti.io/a2a`, `protocol.kagenti.io/mcp`) remain in the Service manifests since they drive AgentCard sync and tool discovery independently.
 
 ### SPIRE AgentCard Signature Verification (RHAIENG-4641)
 
-Both A2A agents use SPIRE-based cryptographic identity to sign their AgentCards. This ensures that each agent's identity is cryptographically bound to its SPIFFE ID, preventing card spoofing.
+All three A2A agents (banking, knowledge, orchestrator) use SPIRE-based cryptographic identity to sign their AgentCards. This ensures that each agent's identity is cryptographically bound to its SPIFFE ID, preventing card spoofing.
 
 **How it works:**
 
@@ -230,7 +230,7 @@ Both A2A agents use SPIRE-based cryptographic identity to sign their AgentCards.
 spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>
 ```
 
-For example: `spiffe://apps.rosa.redbank-demo2.ij5f.p3.openshiftapps.com/ns/redbank-dev/sa/redbank-banking-agent`
+For example: `spiffe://apps.rosa.redbank-demo2.ij5f.p3.openshiftapps.com/ns/redbank-dev/sa/redbank-banking-agent-sa`
 
 Verify enrollment:
 
@@ -243,10 +243,10 @@ oc get agentruntimes
 # redbank-orchestrator-runtime        agent   redbank-orchestrator      Active  ...
 
 oc get agentcards
-# NAME                                  PROTOCOL   KIND         TARGET                    AGENT                        VERIFIED   BOUND   SYNCED
-# redbank-banking-agent-deployment-card    a2a   Deployment   redbank-banking-agent     RedBank Banking...      true   true   True
-# redbank-knowledge-agent-deployment-card a2a   Deployment   redbank-knowledge-agent   RedBank Knowledge...    true   true   True
-# redbank-orchestrator-deployment-card    a2a   Deployment   redbank-orchestrator      RedBank Orchestrator...               True
+# NAME                                      PROTOCOL   KIND         TARGET                    AGENT                     VERIFIED   BOUND   SYNCED
+# redbank-banking-agent-deployment-card     a2a        Deployment   redbank-banking-agent     RedBank Banking...        true       true    True
+# redbank-knowledge-agent-deployment-card   a2a        Deployment   redbank-knowledge-agent   RedBank Knowledge...      true       true    True
+# redbank-orchestrator-deployment-card      a2a        Deployment   redbank-orchestrator      RedBank Orchestrator...   true       true    True
 ```
 
 ### Banking Operations Agent (Agent C)
@@ -320,6 +320,11 @@ The Orchestrator Agent is the entry point for user interactions. It classifies u
 - Each discovered peer becomes a LangChain `StructuredTool` with name and description derived from the peer's agent card
 - The system prompt is rebuilt dynamically from discovered agent card metadata (names, descriptions, skills, examples)
 - If no peers are discovered, the orchestrator informs the user that the system is starting up
+
+**Kagenti enrollment:**
+- **AgentRuntime**: via Helm chart `agentruntime.yaml` (type: `agent`)
+- **AgentCard**: auto-generated by operator, SPIRE signature verification
+- **SPIRE signing**: enabled via `agentCardSigning.enabled: true` in `values.yaml` — adds `sign-agentcard` init container and SPIRE CSI volume to the Helm-deployed pod
 
 **Token propagation:**
 1. User sends request with `Authorization: Bearer <JWT>` to `/chat/completions`
@@ -463,7 +468,7 @@ make compile-pipeline
 # 7. Verify
 oc get pods
 oc get agentruntimes
-oc get agentcards   # expect VERIFIED=true, BOUND=true for both agents
+oc get agentcards   # expect VERIFIED=true, BOUND=true for all three agents
 make verify-signatures
 ```
 
@@ -494,20 +499,22 @@ All configuration lives in a single `.env` file at the project root. Run `make i
 |--------|-------------|
 | `make help` | Show all available targets |
 | `make init` | Create `.env` from `.env.example` |
-| `make deploy` | Deploy everything (Keycloak + DB + MCP + all agents + playground) |
+| `make deploy` | Deploy everything (Keycloak + SPIRE + DB + MCP + all agents + playground) |
 | `make setup-keycloak` | Provision Keycloak realm, client, audience mapper, roles, and demo users |
+| `make deploy-spire` | Apply ClusterSPIFFEID for SPIRE agent card signing |
 | `make deploy-db` | Create namespace and apply Kustomize (Secret + ConfigMap + Deployment + Service) |
 | `make deploy-mcp` | Build MCP server image via `oc new-build` and deploy |
 | `make deploy-banking` | Build and deploy Banking Operations Agent |
 | `make deploy-knowledge` | Build and deploy Knowledge Agent |
 | `make deploy-orchestrator` | Build and deploy Orchestrator Agent (Helm) |
 | `make deploy-playground` | Build and deploy Playground UI (Helm) |
+| `make verify-signatures` | Verify SPIRE agent card signing and identity binding |
 | `make clean` | Tear down all workloads + Keycloak realm (keeps namespace and build configs) |
 | `make test-pgvector` | Run pgvector schema + RLS tests (requires Podman) |
 | `make test-knowledge-agent` | Run A2A tests against Knowledge Agent with Keycloak JWTs |
 | `make compile-pipeline` | Compile the KFP pipeline to YAML |
 
-`make deploy` runs the targets in order: `setup-keycloak` → `deploy-db` → `deploy-mcp` → `deploy-banking` → `deploy-knowledge` → `deploy-orchestrator` → `deploy-playground`.
+`make deploy` runs the targets in order: `setup-keycloak` → `deploy-db` → `deploy-spire` → `deploy-mcp` → `deploy-banking` → `deploy-knowledge` → `deploy-orchestrator` → `deploy-playground`.
 
 ### Deploy Individual Components
 
@@ -529,6 +536,7 @@ This removes:
 - Agent deployments and services
 - Helm releases (orchestrator + playground)
 - Unsigned card ConfigMaps
+- Agent ServiceAccounts and RBAC (signer roles)
 - PostgreSQL deployment, service, and PVC
 - Secrets and configmaps
 - Keycloak `redbank` realm (including users, client, roles)
@@ -850,6 +858,7 @@ These are the env vars each component reads at runtime (set automatically by the
 | `MLFLOW_TRACKING_URI` | (optional) | MLflow tracking endpoint |
 | `MLFLOW_EXPERIMENT_NAME` | `default-agent-experiment` | MLflow experiment name |
 | `AGENT_PUBLIC_URL` | `http://localhost:{PORT}` | Public URL for agent card |
+| `AGENT_CARD_PATH` | `/opt/app-root/.well-known/agent-card.json` | Path to SPIRE-signed agent card (falls back to in-memory card if not found) |
 | `LOG_LEVEL` | `INFO` | Logging level |
 
 ### Playground
