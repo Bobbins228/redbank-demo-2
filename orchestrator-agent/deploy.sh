@@ -29,45 +29,49 @@ function setup() {
 
   cd "${SCRIPT_FOLDER}"
 
-  _out "Building orchestrator image"
-  oc new-build --strategy=docker --binary --name="${agent_name}" \
-    --to="${agent_name}:latest" --namespace "${ns}" 2>/dev/null || true
-  oc start-build "${agent_name}" --from-dir=. --follow --namespace "${ns}"
-
   local img="image-registry.openshift-image-registry.svc:5000/${ns}/${agent_name}:latest"
   local image_repo="${img%:*}"
   local image_tag="latest"
 
-  _out "Deploying orchestrator via Helm"
-  local secrets_file
-  secrets_file=$(mktemp)
-  trap "rm -f ${secrets_file}" EXIT
-  umask 077
-  printf 'secrets:\n  apiKey: "%s"\n' "${api_key}" > "${secrets_file}"
-
-  helm upgrade --install "${agent_name}" ./charts/agent \
-    --namespace "${ns}" \
-    -f values.yaml \
-    -f "${secrets_file}" \
-    --set image.repository="${image_repo}" \
-    --set image.tag="${image_tag}" \
-    --set env.LLM_BASE_URL="${base_url}" \
-    --set env.LLM_MODEL="${model_id}"
-
-  _out "Waiting for rollout..."
-  if oc rollout status "deployment/${agent_name}" --namespace "${ns}" --timeout=120s; then
-    local route
-    route=$(oc get route "${agent_name}" --namespace "${ns}" -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -n "${route}" ]]; then
-      _out "Agent available at: https://${route}"
-    fi
-  else
-    _out "WARNING: Rollout did not complete. Check with:"
-    echo "  oc get pods -n ${ns} -l app.kubernetes.io/name=${agent_name}"
-    echo "  oc logs -n ${ns} deployment/${agent_name}"
+  if [[ "${DEPLOY_ONLY:-}" != "true" ]]; then
+    _out "Building orchestrator image"
+    oc new-build --strategy=docker --binary --name="${agent_name}" \
+      --to="${agent_name}:latest" --namespace "${ns}" 2>/dev/null || true
+    oc start-build "${agent_name}" --from-dir=. --follow --namespace "${ns}"
   fi
 
-  _out "Done deploying ${agent_name}"
+  if [[ "${BUILD_ONLY:-}" != "true" ]]; then
+    _out "Deploying orchestrator via Helm"
+    local secrets_file
+    secrets_file=$(mktemp)
+    trap "rm -f ${secrets_file}" EXIT
+    umask 077
+    printf 'secrets:\n  apiKey: "%s"\n' "${api_key}" > "${secrets_file}"
+
+    helm upgrade --install "${agent_name}" ./charts/agent \
+      --namespace "${ns}" \
+      -f values.yaml \
+      -f "${secrets_file}" \
+      --set image.repository="${image_repo}" \
+      --set image.tag="${image_tag}" \
+      --set env.LLM_BASE_URL="${base_url}" \
+      --set env.LLM_MODEL="${model_id}"
+
+    _out "Waiting for rollout..."
+    if oc rollout status "deployment/${agent_name}" --namespace "${ns}" --timeout=120s; then
+      local route
+      route=$(oc get route "${agent_name}" --namespace "${ns}" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+      if [[ -n "${route}" ]]; then
+        _out "Agent available at: https://${route}"
+      fi
+    else
+      _out "WARNING: Rollout did not complete. Check with:"
+      echo "  oc get pods -n ${ns} -l app.kubernetes.io/name=${agent_name}"
+      echo "  oc logs -n ${ns} deployment/${agent_name}"
+    fi
+  fi
+
+  _out "Done"
 }
 
 setup

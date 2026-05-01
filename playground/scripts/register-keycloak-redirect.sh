@@ -21,7 +21,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-redbank-demo}"
-REALM="${KEYCLOAK_REALM:-redbank}"
+REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
 CLIENT="${KEYCLOAK_CLIENT_ID:-redbank-mcp}"
 
 function _out() {
@@ -31,11 +31,11 @@ function _out() {
 # --- Auto-detect Keycloak URL ------------------------------------------------
 
 if [[ -z "${KEYCLOAK_URL:-}" ]]; then
-  _host=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null) || true
+  _host=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null) || true
   if [[ -n "${_host}" ]]; then
     KEYCLOAK_URL="https://${_host}"
   else
-    echo "ERROR: Cannot detect KEYCLOAK_URL. Set it or ensure 'oc get route keycloak -n keycloak' works." >&2
+    echo "ERROR: Cannot detect KEYCLOAK_URL. Set it in .env or ensure a route exists in namespace keycloak." >&2
     exit 1
   fi
 fi
@@ -56,7 +56,11 @@ fi
 # --- Auto-detect playground URL ----------------------------------------------
 
 if [[ -z "${PLAYGROUND_URL:-}" ]]; then
-  _pg_host=$(oc get route redbank-playground -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null) || true
+  _pg_host=$(oc get route -n "${NAMESPACE}" -l app=redbank-playground -o jsonpath='{.items[0].spec.host}' 2>/dev/null) || true
+  # Fallback: try any route with playground in the name
+  if [[ -z "${_pg_host}" ]]; then
+    _pg_host=$(oc get route -n "${NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name} {.spec.host}{"\n"}{end}' 2>/dev/null | grep playground | head -1 | awk '{print $2}') || true
+  fi
   if [[ -n "${_pg_host}" ]]; then
     PLAYGROUND_URL="https://${_pg_host}"
   else
@@ -85,7 +89,7 @@ fi
 
 CLIENT_UUID=$(curl -sk \
   "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${CLIENT}" \
-  -H "Authorization: Bearer ${TOKEN}" | jq -r '.[0].id')
+  -H "Authorization: Bearer ${TOKEN}" | jq -r 'if type == "array" then .[0].id // empty else empty end')
 
 if [[ -z "$CLIENT_UUID" || "$CLIENT_UUID" == "null" ]]; then
   echo "ERROR: Client '${CLIENT}' not found in realm '${REALM}'. Run setup-keycloak.sh first." >&2
