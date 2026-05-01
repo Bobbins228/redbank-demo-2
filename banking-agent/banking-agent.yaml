@@ -14,7 +14,9 @@ spec:
     metadata:
       labels:
         app: redbank-banking-agent
+        kagenti.io/type: agent
     spec:
+      serviceAccountName: redbank-banking-agent
       containers:
       - name: banking-agent
         image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-banking-agent:latest
@@ -43,12 +45,23 @@ spec:
             secretKeyRef:
               name: llm-credentials
               key: OPENAI_API_KEY
-        # MLflow tracing — set to your OpenShift AI MLflow route.
-        # Omit or leave empty to disable remote tracking.
+        # MLflow tracing — run 'make setup-mlflow' to create the mlflow-credentials secret.
         - name: MLFLOW_TRACKING_URI
-          value: "${MLFLOW_TRACKING_URI}"
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-credentials
+              key: MLFLOW_TRACKING_URI
+              optional: true
+        - name: MLFLOW_TRACKING_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-credentials
+              key: MLFLOW_TRACKING_TOKEN
+              optional: true
         - name: MLFLOW_TRACKING_INSECURE_TLS
           value: "true"
+        - name: MLFLOW_EXPERIMENT_NAME
+          value: "redbank-banking-agent"
 ---
 apiVersion: v1
 kind: Service

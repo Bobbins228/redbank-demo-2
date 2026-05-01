@@ -51,17 +51,18 @@ oc delete configmap -l app=postgresql --ignore-not-found
 
 _out "Cleaning up Keycloak realm"
 if [[ -z "${KEYCLOAK_URL:-}" ]]; then
-  KEYCLOAK_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null)" || true
+  KEYCLOAK_URL="https://$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)" || true
 fi
 if [[ -n "${KEYCLOAK_URL}" && "${KEYCLOAK_URL}" != "https://" && -n "${KEYCLOAK_ADMIN:-}" && -n "${KEYCLOAK_PASSWORD:-}" ]]; then
   TOKEN=$(curl -sf "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
     -d "grant_type=password" -d "client_id=admin-cli" \
     -d "username=${KEYCLOAK_ADMIN}" -d "password=${KEYCLOAK_PASSWORD}" | jq -r '.access_token' 2>/dev/null) || true
   if [[ -n "${TOKEN}" && "${TOKEN}" != "null" ]]; then
-    curl -sf -X DELETE "${KEYCLOAK_URL}/admin/realms/redbank" \
+    REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
+    curl -sf -X DELETE "${KEYCLOAK_URL}/admin/realms/${REALM}" \
       -H "Authorization: Bearer ${TOKEN}" 2>/dev/null && \
-      _out "Deleted Keycloak realm 'redbank'" || \
-      _out "Keycloak realm 'redbank' not found or already deleted"
+      _out "Deleted Keycloak realm '${REALM}'" || \
+      _out "Keycloak realm '${REALM}' not found or already deleted"
   else
     _out "WARNING: Could not authenticate to Keycloak — skipping realm cleanup"
   fi
