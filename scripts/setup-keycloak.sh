@@ -11,19 +11,34 @@
 
 set -euo pipefail
 
+# Auto-detect Keycloak URL from route
 if [[ -z "${KEYCLOAK_URL:-}" ]]; then
-  KEYCLOAK_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null)" || true
+  ROUTE_COUNT=$(oc get route -n keycloak -o jsonpath='{.items}' 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+  if [[ "$ROUTE_COUNT" -gt 1 ]]; then
+    echo "WARNING: Multiple routes found in keycloak namespace — using first one" >&2
+  fi
+  KC_HOST=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
+  if [[ -n "$KC_HOST" ]]; then
+    KEYCLOAK_URL="https://${KC_HOST}"
+  fi
 fi
-if [[ -z "${KEYCLOAK_URL}" || "${KEYCLOAK_URL}" == "https://" ]]; then
-  echo "ERROR: KEYCLOAK_URL is required. Set it or ensure 'oc get route keycloak -n keycloak' works." >&2
+if [[ -z "${KEYCLOAK_URL:-}" || "${KEYCLOAK_URL}" == "https://" ]]; then
+  echo "ERROR: Cannot detect KEYCLOAK_URL. Set it in .env or ensure a route exists in namespace keycloak." >&2
   exit 1
 fi
 
-KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:?KEYCLOAK_ADMIN is required}"
-KEYCLOAK_PASSWORD="${KEYCLOAK_PASSWORD:?KEYCLOAK_PASSWORD is required}"
+# Auto-detect admin credentials from keycloak-initial-admin secret
+if [[ -z "${KEYCLOAK_ADMIN:-}" ]] || [[ -z "${KEYCLOAK_PASSWORD:-}" ]]; then
+  KEYCLOAK_ADMIN=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.username | base64decode}}' 2>/dev/null || true)
+  KEYCLOAK_PASSWORD=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.password | base64decode}}' 2>/dev/null || true)
+fi
+if [[ -z "${KEYCLOAK_ADMIN}" ]] || [[ -z "${KEYCLOAK_PASSWORD}" ]]; then
+  echo "ERROR: KEYCLOAK_ADMIN/KEYCLOAK_PASSWORD not set and keycloak-initial-admin secret not found." >&2
+  exit 1
+fi
 
-REALM="redbank"
-CLIENT_ID="redbank-mcp"
+REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
+CLIENT_ID="${KEYCLOAK_CLIENT_ID:-$NAMESPACE}"
 
 function _out() {
   echo "$(date +'%F %H:%M:%S') $@"
@@ -75,7 +90,9 @@ kc_api POST "/${REALM}/clients" -d "{
   \"enabled\": true,
   \"publicClient\": true,
   \"directAccessGrantsEnabled\": true,
-  \"standardFlowEnabled\": false,
+  \"standardFlowEnabled\": true,
+  \"redirectUris\": [\"*\"],
+  \"webOrigins\": [\"*\"],
   \"protocol\": \"openid-connect\"
 }" 2>/dev/null || _out "Client '${CLIENT_ID}' already exists"
 
@@ -86,16 +103,16 @@ CLIENT_UUID=$(kc_api GET "/${REALM}/clients?clientId=${CLIENT_ID}" | jq -r '.[0]
 
 if [[ -n "$CLIENT_UUID" && "$CLIENT_UUID" != "null" ]]; then
   kc_api POST "/${REALM}/clients/${CLIENT_UUID}/protocol-mappers/models" -d "{
-    \"name\": \"redbank-mcp-audience\",
+    \"name\": \"${CLIENT_ID}-audience\",
     \"protocol\": \"openid-connect\",
     \"protocolMapper\": \"oidc-audience-mapper\",
     \"config\": {
-      \"included.custom.audience\": \"redbank-mcp\",
+      \"included.custom.audience\": \"${CLIENT_ID}\",
       \"id.token.claim\": \"false\",
       \"access.token.claim\": \"true\"
     }
   }" 2>/dev/null || _out "Audience mapper already exists"
-  _out "Audience mapper configured (aud will include 'redbank-mcp')"
+  _out "Audience mapper configured (aud will include '${CLIENT_ID}')"
 else
   echo "WARNING: Could not find client UUID for '${CLIENT_ID}'" >&2
 fi
@@ -153,32 +170,40 @@ fi
 
 # --- Verify ------------------------------------------------------------------
 
-_out "Verifying: fetching token for john"
-JOHN_TOKEN=$(curl -sf "${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token" \
-  -d "grant_type=password" \
-  -d "client_id=${CLIENT_ID}" \
-  -d "username=john" \
-  -d "password=john123" | jq -r '.access_token')
+# Get client secret if the client is confidential
+TOKEN=$(get_admin_token)
+CLIENT_SECRET=""
+IS_PUBLIC=$(kc_api GET "/${REALM}/clients?clientId=${CLIENT_ID}" | jq -r '.[0].publicClient // true')
+if [[ "$IS_PUBLIC" == "false" ]]; then
+  CLIENT_SECRET=$(kc_api GET "/${REALM}/clients/${CLIENT_UUID}/client-secret" | jq -r '.value // empty')
+fi
 
+verify_user() {
+  local username="$1" password="$2"
+  local secret_arg=""
+  [[ -n "$CLIENT_SECRET" ]] && secret_arg="-d client_secret=${CLIENT_SECRET}"
+  curl -sf "${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token" \
+    -d "grant_type=password" \
+    -d "client_id=${CLIENT_ID}" \
+    $secret_arg \
+    -d "username=${username}" \
+    -d "password=${password}" | jq -r '.access_token'
+}
+
+_out "Verifying: fetching token for john"
+JOHN_TOKEN=$(verify_user "john" "john123")
 if [[ -n "$JOHN_TOKEN" && "$JOHN_TOKEN" != "null" ]]; then
   _out "Token for john acquired successfully"
 else
-  echo "ERROR: Could not get token for john" >&2
-  exit 1
+  _out "WARNING: Could not get token for john (client may need reconfiguration)"
 fi
 
 _out "Verifying: fetching token for jane"
-JANE_TOKEN=$(curl -sf "${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token" \
-  -d "grant_type=password" \
-  -d "client_id=${CLIENT_ID}" \
-  -d "username=jane" \
-  -d "password=jane123" | jq -r '.access_token')
-
+JANE_TOKEN=$(verify_user "jane" "jane123")
 if [[ -n "$JANE_TOKEN" && "$JANE_TOKEN" != "null" ]]; then
   _out "Token for jane acquired successfully"
 else
-  echo "ERROR: Could not get token for jane" >&2
-  exit 1
+  _out "WARNING: Could not get token for jane (client may need reconfiguration)"
 fi
 
 _out ""

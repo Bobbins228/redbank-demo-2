@@ -14,7 +14,9 @@ spec:
     metadata:
       labels:
         app: redbank-knowledge-agent
+        kagenti.io/type: agent
     spec:
+      serviceAccountName: redbank-knowledge-agent
       containers:
       - name: knowledge-agent
         image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-knowledge-agent:latest
@@ -40,10 +42,23 @@ spec:
             secretKeyRef:
               name: llm-credentials
               key: OPENAI_API_KEY
+        # MLflow tracing — run 'make setup-mlflow' to create the mlflow-credentials secret.
         - name: MLFLOW_TRACKING_URI
-          value: "${MLFLOW_TRACKING_URI}"
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-credentials
+              key: MLFLOW_TRACKING_URI
+              optional: true
+        - name: MLFLOW_TRACKING_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-credentials
+              key: MLFLOW_TRACKING_TOKEN
+              optional: true
         - name: MLFLOW_TRACKING_INSECURE_TLS
           value: "true"
+        - name: MLFLOW_EXPERIMENT_NAME
+          value: "redbank-knowledge-agent"
 ---
 apiVersion: v1
 kind: Service

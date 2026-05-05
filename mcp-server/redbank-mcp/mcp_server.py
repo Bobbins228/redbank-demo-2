@@ -173,12 +173,14 @@ try:
     _PGVECTOR_USER = os.getenv("PGVECTOR_USER", "app")
     _PGVECTOR_PASSWORD = os.getenv("PGVECTOR_PASSWORD", "app")
 
+    _PGVECTOR_SSLMODE = os.getenv("POSTGRES_SSLMODE", "disable")
+
     def _pgvector_conn_string(role: str) -> str:
         opts = quote(f"-c app.current_role={role}")
         return (
             f"postgresql+psycopg://{_PGVECTOR_USER}:{_PGVECTOR_PASSWORD}"
             f"@{_PGVECTOR_HOST}:{_PGVECTOR_PORT}/{_PGVECTOR_DB}"
-            f"?options={opts}"
+            f"?options={opts}&sslmode={_PGVECTOR_SSLMODE}"
         )
 
     _admin_engine = PGEngine.from_connection_string(url=_pgvector_conn_string("admin"))
