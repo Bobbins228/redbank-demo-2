@@ -233,7 +233,6 @@ data:
       client_secret_file: "/shared/client-secret.txt"
     inbound:
       issuer: "https://${KEYCLOAK_HOST}/realms/${REALM}"
-      expected_audience: "${KEYCLOAK_CLIENT_ID:-redbank-mcp}"
     outbound:
       keycloak_url: "https://${KEYCLOAK_HOST}"
       keycloak_realm: "${REALM}"
@@ -271,7 +270,9 @@ data:
   CLIENT_AUTH_TYPE: "client-secret"
   SPIFFE_IDP_ALIAS: "spire-spiffe"
   JWT_AUDIENCE: "https://${KEYCLOAK_HOST}/realms/${REALM}"
-  EXPECTED_AUDIENCE: "redbank-mcp"
+  # EXPECTED_AUDIENCE intentionally omitted — authbridge validates against
+  # its own Keycloak client ID. Audience scopes ensure user tokens include
+  # all agent client IDs in the aud claim.
   DEFAULT_OUTBOUND_POLICY: "passthrough"
 EOF
 

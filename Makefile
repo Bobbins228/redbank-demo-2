@@ -124,6 +124,8 @@ deploy-from: ##@deploy Import images from IMAGE_NAMESPACE and deploy all (no bui
 	    oc tag "$${IMAGE_NS}/$${IMG}:latest" "$${IMG}:latest" -n $${NAMESPACE}; \
 	  done && \
 	  echo "Images imported" && \
+	  echo "Granting image-puller access to $${IMAGE_NS}..." && \
+	  oc policy add-role-to-group system:image-puller "system:serviceaccounts:$${NAMESPACE}" -n "$${IMAGE_NS}" 2>/dev/null || true && \
 	  $(MAKE) setup-keycloak deploy-db enable-kagenti deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground && \
 	  echo "" && echo "RedBank deployed to $${NAMESPACE} (images from $${IMAGE_NS})"
 
