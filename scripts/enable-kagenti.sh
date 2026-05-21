@@ -276,24 +276,6 @@ data:
   DEFAULT_OUTBOUND_POLICY: "passthrough"
 EOF
 
-# --- keycloak-admin-secret ---------------------------------------------------
-# The operator reads this from the workload namespace. Credentials are sourced
-# from the keycloak-initial-admin secret in the keycloak namespace.
-
-echo "Creating keycloak-admin-secret..."
-KC_ADMIN_USER=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.username | base64decode}}' 2>/dev/null)
-KC_ADMIN_PASS=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.password | base64decode}}' 2>/dev/null)
-
-if [ -n "$KC_ADMIN_USER" ] && [ -n "$KC_ADMIN_PASS" ]; then
-  oc create secret generic keycloak-admin-secret \
-    --from-literal=KEYCLOAK_ADMIN_USERNAME="$KC_ADMIN_USER" \
-    --from-literal=KEYCLOAK_ADMIN_PASSWORD="$KC_ADMIN_PASS" \
-    -n "${NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
-else
-  echo "  WARNING: keycloak-initial-admin secret not found in keycloak namespace"
-  echo "           The operator will wait for keycloak-admin-secret before registering clients"
-fi
-
 # --- Grant kagenti-authbridge SCC to namespace service accounts ----------------
 
 echo "Granting kagenti-authbridge SCC to namespace service accounts..."

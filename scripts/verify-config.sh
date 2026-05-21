@@ -129,9 +129,6 @@ check "spiffe-helper-config exists" \
 check "envoy-config exists" \
   "kubectl get configmap envoy-config -n ${NAMESPACE}"
 
-check "keycloak-admin-secret exists" \
-  "kubectl get secret keycloak-admin-secret -n ${NAMESPACE}"
-
 # Check SPIFFE mode
 CLIENT_AUTH=$(kubectl get configmap authbridge-config -n "${NAMESPACE}" -o jsonpath='{.data.CLIENT_AUTH_TYPE}' 2>/dev/null)
 SPIRE_ON=$(kubectl get configmap authbridge-config -n "${NAMESPACE}" -o jsonpath='{.data.SPIRE_ENABLED}' 2>/dev/null)
