@@ -13,10 +13,10 @@ function setup() {
   _out "Deploying redbank-mcp-server to namespace: ${ns}"
 
   if [[ -z "${KEYCLOAK_HOST:-}" ]]; then
-    KEYCLOAK_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null) || true
+    KEYCLOAK_HOST=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null) || true
   fi
   if [[ -z "${KEYCLOAK_HOST}" ]]; then
-    echo "ERROR: KEYCLOAK_HOST not set and could not auto-detect from 'oc get route keycloak -n keycloak'." >&2
+    echo "ERROR: KEYCLOAK_HOST not set and could not auto-detect from 'oc get route -n keycloak'." >&2
     echo "Set KEYCLOAK_HOST=<your-keycloak-host> and re-run." >&2
     exit 1
   fi
@@ -32,19 +32,25 @@ function setup() {
 
   cd "${SCRIPT_FOLDER}"
 
-  _out Building MCP server image
-  oc new-build --name build-redbank-mcp-server --binary --strategy docker \
-    --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-mcp-server:latest" 2>/dev/null || true
-  oc start-build build-redbank-mcp-server --from-dir=. --follow
+  if [[ "${DEPLOY_ONLY:-}" != "true" ]]; then
+    _out Building MCP server image
+    oc new-build --name build-redbank-mcp-server --binary --strategy docker \
+      --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-mcp-server:latest" 2>/dev/null || true
+    oc start-build build-redbank-mcp-server --from-dir=. --follow
+  fi
 
-  _out Deploying MCP server
-  NAMESPACE="${ns}" KEYCLOAK_HOST="${KEYCLOAK_HOST}" \
-    envsubst '${NAMESPACE} ${KEYCLOAK_HOST}' < ./mcp-server.yaml | oc apply -f -
+  if [[ "${BUILD_ONLY:-}" != "true" ]]; then
+    oc create sa redbank-mcp-server -n "${ns}" 2>/dev/null || true
+    _out Deploying MCP server
+    NAMESPACE="${ns}" KEYCLOAK_HOST="${KEYCLOAK_HOST}" \
+      KEYCLOAK_REALM="${KEYCLOAK_REALM:-redbank}" \
+        envsubst '${NAMESPACE} ${KEYCLOAK_HOST} ${KEYCLOAK_REALM}' < ./mcp-server.yaml | oc apply -f -
 
-  _out Applying AgentRuntime CR
-  oc apply -f ./agentruntime.yaml
+    _out Applying AgentRuntime CR
+    oc apply -f ./agentruntime.yaml
+  fi
 
-  _out Done deploying redbank-mcp-server
+  _out Done
 }
 
 setup

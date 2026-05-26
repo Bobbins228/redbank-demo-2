@@ -18,17 +18,6 @@ function setup() {
     exit 1
   fi
 
-  # Auto-detect the in-cluster OpenShift AI MLflow service if the user didn't
-  # provide one and it exists in the cluster.
-  if [[ -z "${MLFLOW_TRACKING_URI:-}" ]]; then
-    if oc get svc mlflow -n redhat-ods-applications >/dev/null 2>&1; then
-      MLFLOW_TRACKING_URI="https://mlflow.redhat-ods-applications.svc:8443"
-      _out "MLFLOW_TRACKING_URI auto-detected: ${MLFLOW_TRACKING_URI}"
-    else
-      _out "MLFLOW_TRACKING_URI not set and no OpenShift AI MLflow found; traces disabled"
-    fi
-  fi
-
   oc new-project "${ns}" 2>/dev/null || oc project "${ns}"
 
   if [[ -n "${OPENAI_API_KEY:-}" ]]; then
@@ -40,23 +29,27 @@ function setup() {
 
   cd "${SCRIPT_FOLDER}"
 
-  _out "Building knowledge agent image"
-  oc new-build --name build-redbank-knowledge-agent --binary --strategy docker \
-    --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-knowledge-agent:latest" 2>/dev/null || true
-  oc start-build build-redbank-knowledge-agent --from-dir=. --follow
+  if [[ "${DEPLOY_ONLY:-}" != "true" ]]; then
+    _out "Building knowledge agent image"
+    oc new-build --name build-redbank-knowledge-agent --binary --strategy docker \
+      --to="image-registry.openshift-image-registry.svc:5000/${ns}/redbank-knowledge-agent:latest" 2>/dev/null || true
+    oc start-build build-redbank-knowledge-agent --from-dir=. --follow
+  fi
 
-  _out Deploying knowledge agent
-  NAMESPACE="${ns}" \
-    LLM_BASE_URL="${LLM_BASE_URL:-}" \
-    LLM_MODEL="${LLM_MODEL:-}" \
-    MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-}" \
-    envsubst '${NAMESPACE} ${LLM_BASE_URL} ${LLM_MODEL} ${MLFLOW_TRACKING_URI}' \
-    < ./knowledge-agent.yaml | oc apply -f -
+  if [[ "${BUILD_ONLY:-}" != "true" ]]; then
+    oc create sa redbank-knowledge-agent -n "${ns}" 2>/dev/null || true
+    _out Deploying knowledge agent
+    NAMESPACE="${ns}" \
+      LLM_BASE_URL="${LLM_BASE_URL:-}" \
+      LLM_MODEL="${LLM_MODEL:-}" \
+      envsubst '${NAMESPACE} ${LLM_BASE_URL} ${LLM_MODEL}' \
+      < ./knowledge-agent.yaml | oc apply -f -
 
-  _out Applying AgentRuntime CR
-  oc apply -f ./agentruntime.yaml
+    _out Applying AgentRuntime CR
+    oc apply -f ./agentruntime.yaml
+  fi
 
-  _out Done deploying redbank-knowledge-agent
+  _out Done
 }
 
 setup

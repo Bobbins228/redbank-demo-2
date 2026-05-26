@@ -19,14 +19,14 @@
 set -euo pipefail
 
 MCP_URL="${MCP_URL:-http://localhost:8000/mcp}"
-KEYCLOAK_REALM="${KEYCLOAK_REALM:-redbank}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
 KEYCLOAK_CLIENT="${KEYCLOAK_CLIENT:-redbank-mcp}"
 JOHN_PASSWORD="${JOHN_PASSWORD:-john123}"
 JANE_PASSWORD="${JANE_PASSWORD:-jane123}"
 
 # Auto-detect Keycloak URL
 if [[ -z "${KEYCLOAK_URL:-}" ]]; then
-  KEYCLOAK_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  KEYCLOAK_HOST=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
   if [[ -n "${KEYCLOAK_HOST}" ]]; then
     KEYCLOAK_URL="https://${KEYCLOAK_HOST}"
   else

@@ -677,14 +677,24 @@
                     chat.removeChild(chat.lastChild);
                 }
 
+                // Hide chat, show login screen
+                chat.classList.add("hidden");
+                inputArea.classList.add("hidden");
+                userInfo.classList.add("hidden");
+
                 if (authConfig && authConfig.enabled) {
-                    // Redirect to Keycloak logout, then back to our app
-                    const redirectUri = window.location.origin + window.location.pathname;
-                    const logoutUrl =
-                        `${authConfig.url}/realms/${authConfig.realm}/protocol/openid-connect/logout` +
-                        `?client_id=${encodeURIComponent(authConfig.clientId)}` +
-                        `&post_logout_redirect_uri=${encodeURIComponent(redirectUri)}`;
-                    window.location.href = logoutUrl;
+                    // Show login screen
+                    loginScreen.classList.remove("hidden");
+                    loginError.style.display = "none";
+
+                    // Optional: Redirect to Keycloak logout for full SSO logout
+                    // Commented out to avoid redirect loop - user can just re-login
+                    // const redirectUri = window.location.origin + window.location.pathname;
+                    // const logoutUrl =
+                    //     `${authConfig.url}/realms/${authConfig.realm}/protocol/openid-connect/logout` +
+                    //     `?client_id=${encodeURIComponent(authConfig.clientId)}` +
+                    //     `&post_logout_redirect_uri=${encodeURIComponent(redirectUri)}`;
+                    // window.location.href = logoutUrl;
                 }
             }
 
@@ -788,6 +798,22 @@
 
                 setLoading(true);
                 addTypingIndicator();
+
+                // Refresh token if it's about to expire (within 30 seconds)
+                if (accessToken && tokenExpiresAt && refreshToken) {
+                    const timeUntilExpiry = tokenExpiresAt - Date.now();
+                    if (timeUntilExpiry < 30000) {
+                        console.log("Token expiring soon, refreshing before request...");
+                        const refreshed = await doRefreshToken(refreshToken);
+                        if (!refreshed) {
+                            removeTypingIndicator();
+                            addMessage("error", "Session expired. Please log in again.");
+                            logout();
+                            setLoading(false);
+                            return;
+                        }
+                    }
+                }
 
                 let assistantContent = "";
                 let textEl = null;

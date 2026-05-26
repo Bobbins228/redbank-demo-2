@@ -3,6 +3,9 @@ nameOverride: "redbank-orchestrator"
 extraLabels:
   protocol.kagenti.io/a2a: ""
 
+podLabels:
+  kagenti.io/type: agent
+
 agentRuntime:
   enabled: true
 env:

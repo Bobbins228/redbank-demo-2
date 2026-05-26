@@ -32,7 +32,8 @@ def _build_conninfo() -> str:
     database = os.getenv("POSTGRES_DATABASE", "db")
     user = os.getenv("POSTGRES_USER", "user")
     password = os.getenv("POSTGRES_PASSWORD", "pass")
-    return f"host={host} port={port} dbname={database} user={user} password={password}"
+    sslmode = os.getenv("POSTGRES_SSLMODE", "disable")
+    return f"host={host} port={port} dbname={database} user={user} password={password} sslmode={sslmode}"
 
 
 _pool: ConnectionPool | None = None
