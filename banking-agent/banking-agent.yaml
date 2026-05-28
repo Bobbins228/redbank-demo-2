@@ -62,6 +62,9 @@ spec:
           value: "true"
         - name: MLFLOW_EXPERIMENT_NAME
           value: "redbank-banking-agent"
+        # proxy-sidecar mode: exclude K8s API and external LLM from HTTP_PROXY
+        - name: NO_PROXY
+          value: "127.0.0.1,localhost,kubernetes.default.svc,.svc,.cluster.local,10.0.0.0/8"
 ---
 apiVersion: v1
 kind: Service
