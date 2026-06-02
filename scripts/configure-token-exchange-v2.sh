@@ -172,6 +172,45 @@ for ROW in $(echo "$ALL_CLIENTS" | jq -r '.[] | @base64'); do
   fi
 done
 
+# --- Ensure audience scope for the platform client ----------------------------
+# Token exchange with audience=redbank-mcp requires an audience client-scope
+# with an oidc-audience-mapper pointing to redbank-mcp. Without this, Keycloak
+# 26.x (TOKEN_EXCHANGE_STANDARD_V2) rejects the exchange with
+# "Requested audience not available". The operator creates agent-*-aud scopes
+# for each agent, but the platform client needs its own.
+
+TOKEN=$(get_token)
+MCP_SCOPE_NAME="${KEYCLOAK_CLIENT_ID}-aud"
+EXISTING_MCP_SCOPE=$(kc GET "/$REALM/client-scopes" | jq -r ".[] | select(.name == \"$MCP_SCOPE_NAME\") | .id")
+if [ -z "$EXISTING_MCP_SCOPE" ]; then
+  _out "Creating audience scope for ${KEYCLOAK_CLIENT_ID}"
+  SCOPE_LOC=$(curl -sk -D - -X POST "$KC_URL/admin/realms/$REALM/client-scopes" \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"name\":\"$MCP_SCOPE_NAME\",\"protocol\":\"openid-connect\",\"attributes\":{\"display.on.consent.screen\":\"false\"}}" \
+    -o /dev/null 2>&1 | grep -i "^location:" | tr -d '\r' | awk '{print $2}')
+  MCP_SCOPE_ID=$(basename "$SCOPE_LOC")
+  if [ -n "$MCP_SCOPE_ID" ]; then
+    TOKEN=$(get_token)
+    kc POST "/$REALM/client-scopes/$MCP_SCOPE_ID/protocol-mappers/models" \
+      -d "{\"name\":\"${KEYCLOAK_CLIENT_ID}-audience\",\"protocol\":\"openid-connect\",\"protocolMapper\":\"oidc-audience-mapper\",\"config\":{\"included.client.audience\":\"${KEYCLOAK_CLIENT_ID}\",\"id.token.claim\":\"false\",\"access.token.claim\":\"true\",\"lightweight.claim\":\"false\"}}" > /dev/null 2>&1
+    _out "  Created scope $MCP_SCOPE_NAME with audience mapper"
+  fi
+else
+  MCP_SCOPE_ID="$EXISTING_MCP_SCOPE"
+  _out "Audience scope $MCP_SCOPE_NAME already exists"
+fi
+
+# Register as realm default and attach to all clients
+if [ -n "$MCP_SCOPE_ID" ]; then
+  TOKEN=$(get_token)
+  kc PUT "/$REALM/default-default-client-scopes/$MCP_SCOPE_ID" > /dev/null 2>&1 || true
+  for ROW in $(echo "$ALL_CLIENTS" | jq -r '.[].id'); do
+    TOKEN=$(get_token)
+    kc PUT "/$REALM/clients/$ROW/default-client-scopes/$MCP_SCOPE_ID" > /dev/null 2>&1 || true
+  done
+  _out "  Attached $MCP_SCOPE_NAME to all clients"
+fi
+
 # --- Assign audience scopes to all clients ------------------------------------
 # Realm default scopes don't retroactively apply to existing clients.
 # Explicitly assign all agent-*-aud scopes to every kagenti client.
