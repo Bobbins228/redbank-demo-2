@@ -15,6 +15,9 @@ spec:
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "agent.serviceAccountName" . }}
@@ -31,7 +34,8 @@ spec:
               drop:
                 - ALL
           ports:
-            - containerPort: {{ .Values.service.port }}
+            - name: http
+              containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
             - name: PORT
@@ -77,14 +81,14 @@ spec:
           livenessProbe:
             httpGet:
               path: {{ .Values.healthCheck.path }}
-              port: {{ .Values.service.port }}
+              port: http
             initialDelaySeconds: {{ .Values.healthCheck.livenessInitialDelay }}
             periodSeconds: {{ .Values.healthCheck.livenessPeriod }}
             timeoutSeconds: {{ .Values.healthCheck.livenessTimeout }}
           readinessProbe:
             httpGet:
               path: {{ .Values.healthCheck.path }}
-              port: {{ .Values.service.port }}
+              port: http
             initialDelaySeconds: {{ .Values.healthCheck.readinessInitialDelay }}
             periodSeconds: {{ .Values.healthCheck.readinessPeriod }}
             timeoutSeconds: {{ .Values.healthCheck.readinessTimeout }}

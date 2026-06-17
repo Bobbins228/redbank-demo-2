@@ -83,16 +83,8 @@ async def _serve_image(request: Request) -> FileResponse:
 
 
 async def _health(_request: Request) -> JSONResponse:
-    """Proxy health check to the orchestrator to reflect actual agent status."""
-    try:
-        async with httpx.AsyncClient(verify=False) as client:  # noqa: S501
-            resp = await client.get(f"{_ORCHESTRATOR_URL}/health", timeout=5)
-        return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception:
-        logger.warning("Orchestrator health check unreachable: %s", _ORCHESTRATOR_URL)
-        return JSONResponse(
-            {"status": "unhealthy", "agent_initialized": False}, status_code=503
-        )
+    """Health check endpoint for the playground itself (not the orchestrator)."""
+    return JSONResponse({"status": "healthy"}, status_code=200)
 
 
 async def _auth_config(_request: Request) -> JSONResponse:
@@ -130,6 +122,7 @@ async def _auth_token(request: Request) -> JSONResponse:
     kc_url = getenv("KEYCLOAK_URL", "").rstrip("/")
     kc_realm = getenv("KEYCLOAK_REALM", "")
     kc_client = getenv("KEYCLOAK_CLIENT_ID", "")
+    kc_secret = getenv("KEYCLOAK_CLIENT_SECRET", "")
 
     if not (kc_url and kc_realm and kc_client):
         raise HTTPException(status_code=404, detail="Auth not configured")
@@ -148,6 +141,10 @@ async def _auth_token(request: Request) -> JSONResponse:
         "client_id": kc_client,
         "grant_type": grant_type,
     }
+
+    # Add client_secret if configured (required for confidential clients)
+    if kc_secret:
+        form_data["client_secret"] = kc_secret
 
     if grant_type == "authorization_code":
         code = body.get("code")
@@ -185,11 +182,14 @@ async def _auth_token(request: Request) -> JSONResponse:
 async def _proxy_chat_completions(request: Request) -> Response:
     """Proxy POST /chat/completions to the orchestrator, with SSE streaming support."""
     body = await request.body()
-    headers = dict(request.headers)
-    # Forward Authorization header if present
+    # Forward Authorization header if present (case-insensitive lookup)
     fwd_headers: dict[str, str] = {"Content-Type": "application/json"}
-    if "authorization" in headers:
-        fwd_headers["Authorization"] = headers["authorization"]
+    auth_header = request.headers.get("authorization")
+    if auth_header:
+        fwd_headers["Authorization"] = auth_header
+        logger.info("Forwarding Authorization header (first 50 chars): %s...", auth_header[:50])
+    else:
+        logger.warning("No Authorization header in request")
 
     import json
 

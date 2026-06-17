@@ -3,8 +3,15 @@ nameOverride: "redbank-orchestrator"
 extraLabels:
   protocol.kagenti.io/a2a: ""
 
+podLabels:
+  kagenti.io/type: agent
+
 agentRuntime:
   enabled: true
 env:
   LLM_MODEL: ""
   LLM_BASE_URL: ""
+  # proxy-sidecar mode: authbridge injects HTTP_PROXY/HTTPS_PROXY for outbound
+  # token exchange. NO_PROXY must exclude the K8s API (agent discovery), cluster
+  # services, and external LLM endpoints that don't need token exchange.
+  NO_PROXY: "127.0.0.1,localhost,kubernetes.default.svc,.svc,.cluster.local,10.0.0.0/8"

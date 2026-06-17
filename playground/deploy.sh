@@ -21,51 +21,64 @@ function setup() {
 
   cd "${SCRIPT_FOLDER}"
 
-  _out "Building playground image"
-  oc new-build --strategy=docker --binary --name="${agent_name}" \
-    --to="${agent_name}:latest" --namespace "${ns}" 2>/dev/null || true
-  oc start-build "${agent_name}" --from-dir=. --follow --namespace "${ns}"
-
   local img="image-registry.openshift-image-registry.svc:5000/${ns}/${agent_name}:latest"
   local image_repo="${img%:*}"
   local image_tag="latest"
 
-  _out "Deploying playground via Helm"
-
-  local helm_sets=(
-    --set image.repository="${image_repo}"
-    --set image.tag="${image_tag}"
-    --set env.ORCHESTRATOR_URL="${orch_url}"
-  )
-
-  [[ -n "${KEYCLOAK_URL:-}" ]] && helm_sets+=(--set env.KEYCLOAK_URL="${KEYCLOAK_URL}")
-  [[ -n "${KEYCLOAK_REALM:-}" ]] && helm_sets+=(--set env.KEYCLOAK_REALM="${KEYCLOAK_REALM}")
-  [[ -n "${KEYCLOAK_CLIENT_ID:-}" ]] && helm_sets+=(--set env.KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}")
-
-  helm upgrade --install "${agent_name}" ./charts/agent \
-    --namespace "${ns}" \
-    -f values.yaml \
-    "${helm_sets[@]}"
-
-  _out "Waiting for rollout..."
-  if oc rollout status "deployment/${agent_name}" --namespace "${ns}" --timeout=120s; then
-    local route
-    route=$(oc get route "${agent_name}" --namespace "${ns}" -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -n "${route}" ]]; then
-      _out "Playground available at: https://${route}"
-    fi
-    if [[ -n "${KEYCLOAK_URL:-}${KEYCLOAK_REALM:-}${KEYCLOAK_CLIENT_ID:-}" ]]; then
-      _out "Registering Keycloak redirect URI..."
-      NAMESPACE="${ns}" bash scripts/register-keycloak-redirect.sh || \
-        _out "WARNING: Keycloak redirect registration failed."
-    fi
-  else
-    _out "WARNING: Rollout did not complete. Check with:"
-    echo "  oc get pods -n ${ns} -l app.kubernetes.io/name=${agent_name}"
-    echo "  oc logs -n ${ns} deployment/${agent_name}"
+  if [[ "${DEPLOY_ONLY:-}" != "true" ]]; then
+    _out "Building playground image"
+    oc new-build --strategy=docker --binary --name="${agent_name}" \
+      --to="${agent_name}:latest" --namespace "${ns}" 2>/dev/null || true
+    oc start-build "${agent_name}" --from-dir=. --follow --namespace "${ns}"
   fi
 
-  _out "Done deploying ${agent_name}"
+  if [[ "${BUILD_ONLY:-}" != "true" ]]; then
+    _out "Deploying playground via Helm"
+
+    local helm_sets=(
+      --set image.repository="${image_repo}"
+      --set image.tag="${image_tag}"
+      --set env.ORCHESTRATOR_URL="${orch_url}"
+    )
+
+    # Auto-detect Keycloak settings if not set
+    if [[ -z "${KEYCLOAK_URL:-}" ]]; then
+      local _kc_host
+      _kc_host=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null) || true
+      [[ -n "$_kc_host" ]] && KEYCLOAK_URL="https://${_kc_host}"
+    fi
+    [[ -z "${KEYCLOAK_REALM:-}" ]] && KEYCLOAK_REALM="${ns}"
+    [[ -z "${KEYCLOAK_CLIENT_ID:-}" ]] && KEYCLOAK_CLIENT_ID="redbank-mcp"
+
+    [[ -n "${KEYCLOAK_URL:-}" ]] && helm_sets+=(--set env.KEYCLOAK_URL="${KEYCLOAK_URL}")
+    [[ -n "${KEYCLOAK_REALM:-}" ]] && helm_sets+=(--set env.KEYCLOAK_REALM="${KEYCLOAK_REALM}")
+    [[ -n "${KEYCLOAK_CLIENT_ID:-}" ]] && helm_sets+=(--set env.KEYCLOAK_CLIENT_ID="${KEYCLOAK_CLIENT_ID}")
+
+    helm upgrade --install "${agent_name}" ./charts/agent \
+      --namespace "${ns}" \
+      -f values.yaml \
+      "${helm_sets[@]}"
+
+    _out "Waiting for rollout..."
+    if oc rollout status "deployment/${agent_name}" --namespace "${ns}" --timeout=120s; then
+      local route
+      route=$(oc get route "${agent_name}" --namespace "${ns}" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+      if [[ -n "${route}" ]]; then
+        _out "Playground available at: https://${route}"
+      fi
+      if [[ -n "${KEYCLOAK_URL:-}${KEYCLOAK_REALM:-}${KEYCLOAK_CLIENT_ID:-}" ]]; then
+        _out "Registering Keycloak redirect URI..."
+        NAMESPACE="${ns}" bash scripts/register-keycloak-redirect.sh || \
+          _out "WARNING: Keycloak redirect registration failed."
+      fi
+    else
+      _out "WARNING: Rollout did not complete. Check with:"
+      echo "  oc get pods -n ${ns} -l app.kubernetes.io/name=${agent_name}"
+      echo "  oc logs -n ${ns} deployment/${agent_name}"
+    fi
+  fi
+
+  _out "Done"
 }
 
 setup
