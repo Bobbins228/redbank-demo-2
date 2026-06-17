@@ -27,12 +27,13 @@ _out "Enabling SPIFFE identity in namespace ${NAMESPACE}"
 # --- 1. Detect SPIFFE IDP and choose auth type ------------------------------
 
 REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
-KC_HOST="${KEYCLOAK_HOST:-$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)}"
+KC_HOST="${KEYCLOAK_HOST:-$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)}"
 KC_URL="https://${KC_HOST}"
 KC_ADMIN_USER=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.username | base64decode}}' 2>/dev/null || true)
 KC_ADMIN_PASS=$(kubectl get secret keycloak-initial-admin -n keycloak -o go-template='{{.data.password | base64decode}}' 2>/dev/null || true)
 
 AUTH_TYPE="client-secret"
+TOKEN=""
 if [ -n "$KC_ADMIN_USER" ] && [ -n "$KC_ADMIN_PASS" ]; then
   TOKEN=$(curl -sk "$KC_URL/realms/master/protocol/openid-connect/token" \
     -d "grant_type=password" -d "client_id=admin-cli" \
@@ -57,27 +58,34 @@ oc patch configmap authbridge-config -n "${NAMESPACE}" --type=merge \
 
 # --- 2. Update authbridge-runtime-config -------------------------------------
 
-_out "Updating authbridge-runtime-config (identity type + jwt_svid_path)"
+_out "Updating authbridge-runtime-config (jwt_svid_path + jwt_audience)"
+# Note: identity.type stays as client-secret. The authbridge-proxy uses
+# client-secret for its own token exchange calls. SPIFFE identity is used
+# by the test harness (from inside pods) and by the operator for client
+# registration (driven by CLIENT_AUTH_TYPE in authbridge-config).
 RUNTIME_YAML=$(oc get configmap authbridge-runtime-config -n "${NAMESPACE}" -o jsonpath='{.data.config\.yaml}')
 UPDATED_YAML=$(echo "$RUNTIME_YAML" | python3 -c "
 import sys
 lines = []
 has_svid = False
+has_aud = False
 for line in sys.stdin:
     stripped = line.rstrip()
     if 'jwt_svid_path' in stripped:
         has_svid = True
+    if 'jwt_audience' in stripped:
+        has_aud = True
     lines.append(stripped)
-# Rewrite with correct identity type and jwt_svid_path
+# Add jwt_svid_path and jwt_audience (keep identity.type as client-secret)
 result = []
 for line in lines:
-    if 'type: \"client-secret\"' in line:
-        result.append(line.replace('client-secret', 'spiffe'))
-    else:
-        result.append(line)
-    if 'client_secret_file' in line and not has_svid:
+    result.append(line)
+    if 'client_secret_file' in line:
         indent = len(line) - len(line.lstrip())
-        result.append(' ' * indent + 'jwt_svid_path: \"/opt/jwt_svid.token\"')
+        if not has_svid:
+            result.append(' ' * indent + 'jwt_svid_path: \"/opt/jwt_svid.token\"')
+        if not has_aud:
+            result.append(' ' * indent + 'jwt_audience: \"https://${KC_HOST}/realms/${REALM}\"')
 print('\n'.join(result))
 ")
 oc patch configmap authbridge-runtime-config -n "${NAMESPACE}" --type=merge \
@@ -87,7 +95,7 @@ oc patch configmap authbridge-runtime-config -n "${NAMESPACE}" --type=merge \
 # Community Keycloak uses http:// when TLS terminates at the route
 
 _out "Checking Keycloak issuer for JWT audience"
-KC_HOST="${KEYCLOAK_HOST:-$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}')}"
+KC_HOST="${KEYCLOAK_HOST:-$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)}"
 REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
 KC_ISSUER=$(curl -sk "https://${KC_HOST}/realms/${REALM}/.well-known/openid-configuration" 2>/dev/null | jq -r '.issuer // empty')
 if [ -n "$KC_ISSUER" ]; then
@@ -159,7 +167,20 @@ for CM in $(oc get configmap -n "${NAMESPACE}" -o name | grep authbridge-config-
   oc delete "$CM" -n "${NAMESPACE}"
 done
 
-# --- 5. Restart workloads ----------------------------------------------------
+# --- 5. Wait for operator to regenerate per-agent configs ---------------------
+
+_out "Waiting for operator to regenerate per-agent configs..."
+EXPECTED_CMS=$(echo "$WORKLOADS" | wc -l | tr -d ' ')
+for i in $(seq 1 30); do
+  FOUND=$(oc get configmap -n "${NAMESPACE}" -o name 2>/dev/null | grep -c "authbridge-config-redbank" || true)
+  if [ "$FOUND" -ge "$EXPECTED_CMS" ]; then
+    _out "  ${FOUND} per-agent configs regenerated"
+    break
+  fi
+  sleep 5
+done
+
+# --- 6. Restart workloads ----------------------------------------------------
 
 _out "Restarting all workloads to pick up SPIFFE identity"
 for DEPLOY in $WORKLOADS; do

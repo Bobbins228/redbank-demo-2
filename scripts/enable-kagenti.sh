@@ -11,11 +11,17 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:?NAMESPACE is required}"
 REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
 
-CLUSTER_DOMAIN=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null | sed 's/^keycloak-keycloak\.//')
-if [ -z "$CLUSTER_DOMAIN" ]; then
-  echo "ERROR: Cannot detect cluster domain from keycloak route." >&2
+# Try the canonical 'keycloak' route first, fall back to any route in the namespace
+KC_ROUTE_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || true)
+if [ -z "$KC_ROUTE_HOST" ]; then
+  KC_ROUTE_HOST=$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
+fi
+if [ -z "$KC_ROUTE_HOST" ]; then
+  echo "ERROR: Cannot detect Keycloak route in namespace keycloak." >&2
+  echo "  Create a route named 'keycloak' or set KEYCLOAK_HOST." >&2
   exit 1
 fi
+CLUSTER_DOMAIN=$(echo "$KC_ROUTE_HOST" | sed 's/^keycloak-keycloak\.//' | sed 's/^keycloak\.//')
 KEYCLOAK_HOST="${KEYCLOAK_HOST:-keycloak-keycloak.${CLUSTER_DOMAIN}}"
 
 echo "Enabling kagenti in namespace ${NAMESPACE} (cluster: ${CLUSTER_DOMAIN}, realm: ${REALM})"
@@ -220,6 +226,9 @@ metadata:
 data:
   config.yaml: |
     mode: proxy-sidecar
+    egressEnforcement: none
+    mtls:
+      mode: disabled
     bypass:
       inbound_paths:
         - "/.well-known/*"
@@ -299,6 +308,37 @@ echo "Granting kagenti-authbridge SCC to namespace service accounts..."
 oc adm policy add-scc-to-group kagenti-authbridge "system:serviceaccounts:${NAMESPACE}" 2>/dev/null || true
 echo "SCC granted"
 
+# --- RBAC workarounds for optional CRD controllers ----------------------------
+# The operator's SharedTrust and MLflow controllers crash if their CRDs exist
+# but the ServiceAccount lacks list/watch permissions. These are safe no-ops
+# if the CRDs don't exist.
+
+echo "Applying RBAC workarounds for optional controllers..."
+
+# cert-manager certificates
+if oc get crd certificates.cert-manager.io &>/dev/null; then
+  oc create clusterrole kagenti-cert-manager-reader \
+    --verb=get,list,watch --resource=certificates.cert-manager.io \
+    --dry-run=client -o yaml | oc apply -f -
+  oc create clusterrolebinding kagenti-cert-manager-reader \
+    --clusterrole=kagenti-cert-manager-reader \
+    --serviceaccount=kagenti-system:controller-manager \
+    --dry-run=client -o yaml | oc apply -f -
+  echo "  cert-manager RBAC applied"
+fi
+
+# OpenDataHub DataScienceCluster
+if oc get crd datascienceclusters.datasciencecluster.opendatahub.io &>/dev/null; then
+  oc create clusterrole kagenti-datasciencecluster-reader \
+    --verb=get,list,watch --resource=datascienceclusters.datasciencecluster.opendatahub.io \
+    --dry-run=client -o yaml | oc apply -f -
+  oc create clusterrolebinding kagenti-datasciencecluster-reader \
+    --clusterrole=kagenti-datasciencecluster-reader \
+    --serviceaccount=kagenti-system:controller-manager \
+    --dry-run=client -o yaml | oc apply -f -
+  echo "  DataScienceCluster RBAC applied"
+fi
+
 # --- Add namespace to operator's NAMESPACES2WATCH ---------------------------
 
 echo "Adding ${NAMESPACE} to kagenti operator NAMESPACES2WATCH..."
@@ -333,6 +373,29 @@ if [ -n "$OPERATOR_DEPLOY" ]; then
   fi
 else
   echo "  WARNING: No kagenti operator deployment found in kagenti-system"
+fi
+
+# --- Set SPIRE trust domain on operator (if not already set) ------------------
+
+echo "Checking KAGENTI_SPIRE_TRUST_DOMAIN on operator..."
+if [ -n "$OPERATOR_DEPLOY" ]; then
+  CURRENT_TD=$(oc get deploy "$OPERATOR_DEPLOY" -n kagenti-system \
+    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="KAGENTI_SPIRE_TRUST_DOMAIN")].value}' 2>/dev/null || true)
+  if [ -z "$CURRENT_TD" ]; then
+    # Derive trust domain from cluster apps domain
+    TRUST_DOMAIN="${CLUSTER_DOMAIN}"
+    echo "  Setting KAGENTI_SPIRE_TRUST_DOMAIN=${TRUST_DOMAIN}"
+    HAS_ENV=$(oc get deploy "$OPERATOR_DEPLOY" -n kagenti-system -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null)
+    if [ -n "$HAS_ENV" ] && [ "$HAS_ENV" != "null" ]; then
+      oc patch deploy "$OPERATOR_DEPLOY" -n kagenti-system --type=json \
+        -p="[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env/-\",\"value\":{\"name\":\"KAGENTI_SPIRE_TRUST_DOMAIN\",\"value\":\"${TRUST_DOMAIN}\"}}]"
+    else
+      oc patch deploy "$OPERATOR_DEPLOY" -n kagenti-system --type=json \
+        -p="[{\"op\":\"add\",\"path\":\"/spec/template/spec/containers/0/env\",\"value\":[{\"name\":\"KAGENTI_SPIRE_TRUST_DOMAIN\",\"value\":\"${TRUST_DOMAIN}\"}]}]"
+    fi
+  else
+    echo "  Already set: ${CURRENT_TD}"
+  fi
 fi
 
 echo ""

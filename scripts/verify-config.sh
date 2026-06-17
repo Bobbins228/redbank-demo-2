@@ -24,7 +24,7 @@ check() {
 
 KC_URL="${KEYCLOAK_URL:-}"
 if [ -z "$KC_URL" ]; then
-  KC_URL="https://$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)"
+  KC_URL="https://$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)"
 fi
 
 echo ""
@@ -122,6 +122,25 @@ check "authbridge-config exists" \
 
 check "authbridge-runtime-config exists" \
   "kubectl get configmap authbridge-runtime-config -n ${NAMESPACE}"
+
+# Check ROSA HCP workarounds
+EGRESS_MODE=$(kubectl get configmap authbridge-runtime-config -n "${NAMESPACE}" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | grep -o 'egressEnforcement:.*' | awk '{print $2}')
+if [ "$EGRESS_MODE" = "none" ]; then
+  ok "egressEnforcement: none (ROSA HCP)"
+else
+  echo "  ℹ️  egressEnforcement: ${EGRESS_MODE:-not set}"
+fi
+
+MTLS_MODE=$(kubectl get configmap authbridge-runtime-config -n "${NAMESPACE}" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | grep -A1 'mtls:' | grep 'mode:' | awk '{print $2}')
+echo "  ℹ️  mTLS mode: ${MTLS_MODE:-not set}"
+
+# Check SPIRE trust domain on operator
+TD=$(oc get deploy kagenti-controller-manager -n kagenti-system -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="KAGENTI_SPIRE_TRUST_DOMAIN")].value}' 2>/dev/null)
+if [ -n "$TD" ]; then
+  ok "SPIRE trust domain: ${TD}"
+else
+  echo "  ℹ️  KAGENTI_SPIRE_TRUST_DOMAIN: not set on operator"
+fi
 
 check "spiffe-helper-config exists" \
   "kubectl get configmap spiffe-helper-config -n ${NAMESPACE}"

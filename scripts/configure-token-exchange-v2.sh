@@ -23,7 +23,9 @@ REALM="${KEYCLOAK_REALM:-$NAMESPACE}"
 
 KC_URL="${KEYCLOAK_URL:-}"
 if [ -z "$KC_URL" ]; then
-  KC_URL="https://$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}')"
+  KC_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null \
+    || oc get route -n keycloak -o jsonpath='{.items[0].spec.host}')
+  KC_URL="https://${KC_HOST}"
 fi
 
 # Get admin credentials from keycloak-initial-admin

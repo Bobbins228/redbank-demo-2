@@ -165,7 +165,9 @@ FAILURES=0
 if [ -n "${KEYCLOAK_URL:-}" ]; then
   KC_URL="$KEYCLOAK_URL"
 else
-  KC_URL="https://$(oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)"
+  KC_HOST=$(oc get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null \
+    || oc get route -n keycloak -o jsonpath='{.items[0].spec.host}' 2>/dev/null)
+  KC_URL="https://${KC_HOST}"
 fi
 KEYCLOAK_URL="$KC_URL"
 

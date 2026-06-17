@@ -68,6 +68,16 @@ setup-keycloak: ##@setup 2. Configure Keycloak realm, clients, and users
 enable-kagenti: ##@setup 3. Label namespace, create configmaps for sidecar injection
 	@$(LOAD_ENV) && bash scripts/enable-kagenti.sh
 
+fix-rbac: ##@setup 3b. Apply RBAC workarounds for cert-manager/ODH (auto-run by enable-kagenti)
+	@oc get crd certificates.cert-manager.io &>/dev/null && \
+	  oc create clusterrole kagenti-cert-manager-reader --verb=get,list,watch --resource=certificates.cert-manager.io --dry-run=client -o yaml | oc apply -f - && \
+	  oc create clusterrolebinding kagenti-cert-manager-reader --clusterrole=kagenti-cert-manager-reader --serviceaccount=kagenti-system:controller-manager --dry-run=client -o yaml | oc apply -f - && \
+	  echo "cert-manager RBAC applied" || true
+	@oc get crd datascienceclusters.datasciencecluster.opendatahub.io &>/dev/null && \
+	  oc create clusterrole kagenti-datasciencecluster-reader --verb=get,list,watch --resource=datascienceclusters.datasciencecluster.opendatahub.io --dry-run=client -o yaml | oc apply -f - && \
+	  oc create clusterrolebinding kagenti-datasciencecluster-reader --clusterrole=kagenti-datasciencecluster-reader --serviceaccount=kagenti-system:controller-manager --dry-run=client -o yaml | oc apply -f - && \
+	  echo "DataScienceCluster RBAC applied" || true
+
 setup-keycloak-spiffe: ##@setup 4. Create SPIFFE Identity Provider in Keycloak (optional)
 	@$(LOAD_ENV) && bash scripts/setup-keycloak-spiffe.sh
 
@@ -217,7 +227,7 @@ uninstall-keycloak: ##@clean Uninstall Keycloak (both RHBK and community)
 
 .PHONY: help init \
 	install-keycloak install-keycloak-community uninstall-keycloak \
-	setup-keycloak enable-kagenti configure-token-exchange setup-keycloak-spiffe enable-spiffe setup-mlflow disable-mlflow \
+	setup-keycloak enable-kagenti fix-rbac configure-token-exchange setup-keycloak-spiffe enable-spiffe setup-mlflow disable-mlflow \
 	build build-mcp build-banking build-knowledge build-orchestrator build-playground \
 	deploy deploy-from deploy-db deploy-mcp deploy-banking deploy-knowledge deploy-orchestrator deploy-playground \
 	compile-pipeline ingest-local \
